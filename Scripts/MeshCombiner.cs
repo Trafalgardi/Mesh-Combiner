@@ -29,6 +29,10 @@ public class MeshCombiner : MonoBehaviour
     [SerializeField] private bool combineInactiveChildren;
     [SerializeField] private MeshFilter[] meshFiltersToSkip = Array.Empty<MeshFilter>();
 
+    [Header("Geometry Cleanup")]
+    [SerializeField] private bool removeExactOpposingFaces;
+    [SerializeField, Min(0.000001f)] private float exactFacePositionTolerance = 0.0001f;
+
     [Header("Output")]
     [SerializeField] private bool deactivateCombinedChildren = true;
     [SerializeField] private bool deactivateCombinedChildrenMeshRenderers;
@@ -49,6 +53,7 @@ public class MeshCombiner : MonoBehaviour
     private float _lastDensityScaleRangeMax = 1f;
     private int _lastSkippedDisabledRenderers;
     private int _lastSkippedNestedDuplicates;
+    private int _lastRemovedExactOpposingFacePairs;
 
     private sealed class UvChart
     {
@@ -163,6 +168,8 @@ public class MeshCombiner : MonoBehaviour
 
     public bool CreateMultiMaterialMesh { get => createMultiMaterialMesh; set => createMultiMaterialMesh = value; }
     public bool CombineInactiveChildren { get => combineInactiveChildren; set => combineInactiveChildren = value; }
+    public bool RemoveExactOpposingFaces { get => removeExactOpposingFaces; set => removeExactOpposingFaces = value; }
+    public float ExactFacePositionTolerance { get => exactFacePositionTolerance; set => exactFacePositionTolerance = Mathf.Max(0.000001f, value); }
     public bool UpdateOrCreateMeshCollider { get => updateOrCreateMeshCollider; set => updateOrCreateMeshCollider = value; }
     public LightmapUvMode UvMode { get => lightmapUvMode; set => lightmapUvMode = value; }
     public int RepackPaddingTexels { get => repackPaddingTexels; set => repackPaddingTexels = Mathf.Clamp(value, 1, 16); }
@@ -229,7 +236,11 @@ public class MeshCombiner : MonoBehaviour
             if (!combined || combinedMesh == null) return false;
 
             combinedMesh.name = name;
+            _lastRemovedExactOpposingFacePairs = removeExactOpposingFaces
+                ? MeshExactFaceCleanup.RemoveExactOpposingTrianglePairs(combinedMesh, exactFacePositionTolerance)
+                : 0;
             combinedMesh.RecalculateBounds();
+
             int verticesBeforeUvGeneration = combinedMesh.vertexCount;
             if (lightmapUvMode == LightmapUvMode.RegenerateUv2 && !GenerateUVIfRequested(combinedMesh))
             {
@@ -250,8 +261,8 @@ public class MeshCombiner : MonoBehaviour
                 int addedVertices = combinedMesh.vertexCount - verticesBeforeUvGeneration;
                 Debug.Log("<color=#00cc00><b>Mesh \"" + name + "\" was created from " + sourceMeshFilters.Count +
                           " child meshes, " + combinedMesh.subMeshCount + " submeshes, " + combinedMesh.vertexCount +
-                          " vertices and " + CountTriangles(combinedMesh) + " triangles" + BuildLightmapResultMessage(addedVertices) +
-                          ".</b></color>", this);
+                          " vertices and " + CountTriangles(combinedMesh) + " triangles" + BuildGeometryCleanupResultMessage() +
+                          BuildLightmapResultMessage(addedVertices) + ".</b></color>", this);
             }
             return true;
         }
@@ -273,7 +284,7 @@ public class MeshCombiner : MonoBehaviour
         if (showInfo)
         {
             Debug.Log("Mesh Combiner: cleared combined output for \"" + name +
-                      "\". Use the Editor Restore / Undo Combine button to restore the exact source hierarchy state.", this);
+                      "\". Use the Editor restore/recovery controls to restore source hierarchy state.", this);
         }
     }
 
@@ -924,6 +935,14 @@ public class MeshCombiner : MonoBehaviour
                 if (meshRenderer != null) meshRenderer.enabled = false;
             }
         }
+    }
+
+    private string BuildGeometryCleanupResultMessage()
+    {
+        if (!removeExactOpposingFaces) return string.Empty;
+        return ", removed " + _lastRemovedExactOpposingFacePairs +
+               " exact opposing face pairs (" + (_lastRemovedExactOpposingFacePairs * 2) +
+               " triangles) at tolerance " + exactFacePositionTolerance.ToString("0.######");
     }
 
     private string BuildLightmapResultMessage(int addedVertices)
