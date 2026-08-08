@@ -32,7 +32,7 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
     {
         EditorGUILayout.LabelField("Coplanar Stitched Lightmap UV2", EditorStyles.boldLabel);
         EditorGUILayout.HelpBox(
-            "Experimental seam diagnostic/generator. It groups coplanar triangles through exact shared geometric edges and through collinear partially-overlapping boundary edges (T-junctions), then planar-projects each connected surface into one continuous UV2 chart. Geometry, UV0, normals, tangents and materials are not changed.",
+            "Experimental seam diagnostic/generator. It groups coplanar triangles through exact shared geometric edges and through collinear partially-overlapping seam edges (T-junctions), then planar-projects each connected surface into one continuous UV2 chart. Geometry, UV0, normals, tangents and materials are not changed.",
             MessageType.Info);
 
         _target = (GameObject)EditorGUILayout.ObjectField("Target", _target, typeof(GameObject), true);
@@ -41,7 +41,7 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
             EditorGUILayout.FloatField(
                 new GUIContent(
                     "Edge Position Tolerance",
-                    "World-space tolerance used for exact endpoints and for deciding whether partially overlapping boundary edges lie on the same line."),
+                    "World-space tolerance used for exact endpoints and for deciding whether partially overlapping seam edges lie on the same line."),
                 _positionTolerance));
 
         _coplanarAngleDegrees = Mathf.Clamp(
@@ -70,7 +70,7 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
 
         EditorGUILayout.Space();
         EditorGUILayout.HelpBox(
-            "T-junction support is generic: a long boundary edge can stitch to one or more shorter collinear edges when they physically overlap and their triangles are coplanar. This is useful for modular walls where window/door openings subdivide one side of a module boundary.",
+            "T-junction support is generic. On closed meshes, a visible module perimeter is normally shared by a front/back surface and a side surface, so it is not an open mesh boundary. The stitcher therefore examines hard/open/non-manifold seam candidates and ignores ordinary coplanar triangulation edges. A long seam edge can stitch to one or more shorter collinear edges when they physically overlap and their owning triangles are coplanar.",
             MessageType.Info);
         EditorGUILayout.HelpBox(
             "Safety: if one vertex index is shared by multiple hard-angle generated charts, generation aborts instead of silently corrupting UV2. The current test mode requires triangle topology.",
@@ -165,7 +165,7 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
             "Generated " + result.chartCount + " coplanar UV2 charts from " + result.triangleCount +
             " triangles. Stitched " + result.exactEdgeConnections + " exact shared-edge connections + " +
             result.partialCollinearEdgeConnections + " partial/T-junction connections = " +
-            result.stitchedEdgeConnections + " total. Boundary edges inspected: " + result.boundaryEdgeCount +
+            result.stitchedEdgeConnections + " total. Seam-candidate edge records inspected: " + result.boundaryEdgeCount +
             ". Assigned " + result.assignedVertexCount + " vertices; packing scale " +
             result.packingScale.ToString("0.###") +
             ". Geometry and render attributes were not modified.";
@@ -176,7 +176,7 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
             "\": " + result.chartCount + " charts, " + result.exactEdgeConnections +
             " exact edge connections + " + result.partialCollinearEdgeConnections +
             " partial/T-junction connections = " + result.stitchedEdgeConnections +
-            " total, " + result.boundaryEdgeCount + " boundary edges inspected, " +
+            " total, " + result.boundaryEdgeCount + " seam-candidate edge records inspected, " +
             result.assignedVertexCount + " assigned vertices, packing scale " +
             result.packingScale.ToString("0.###") + ", tolerance " +
             result.positionTolerance.ToString("0.######") + ", coplanar angle " +
