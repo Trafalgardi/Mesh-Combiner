@@ -6,139 +6,238 @@ using UnityEngine;
 [CustomEditor(typeof(MeshCombiner))]
 public class MeshCombinerEditor : Editor
 {
-	public override void OnInspectorGUI()
-	{
-		MeshCombiner meshCombiner = (MeshCombiner)target;
-		Mesh mesh = meshCombiner.GetComponent<MeshFilter>().sharedMesh;
+    private SerializedProperty _createMultiMaterialMesh;
+    private SerializedProperty _combineInactiveChildren;
+    private SerializedProperty _meshFiltersToSkip;
+    private SerializedProperty _deactivateCombinedChildren;
+    private SerializedProperty _deactivateCombinedChildrenMeshRenderers;
+    private SerializedProperty _updateOrCreateMeshCollider;
+    private SerializedProperty _generateUVMap;
+    private SerializedProperty _destroyCombinedChildren;
+    private SerializedProperty _folderPath;
 
-		#region Script:
-		GUI.enabled = false;
-		EditorGUILayout.ObjectField("Script", MonoScript.FromMonoBehaviour((MeshCombiner)target), typeof(MeshCombiner), false);
-		GUI.enabled = true;
-		#endregion Script.
+    private void OnEnable()
+    {
+        _createMultiMaterialMesh = serializedObject.FindProperty("createMultiMaterialMesh");
+        _combineInactiveChildren = serializedObject.FindProperty("combineInactiveChildren");
+        _meshFiltersToSkip = serializedObject.FindProperty("meshFiltersToSkip");
+        _deactivateCombinedChildren = serializedObject.FindProperty("deactivateCombinedChildren");
+        _deactivateCombinedChildrenMeshRenderers = serializedObject.FindProperty("deactivateCombinedChildrenMeshRenderers");
+        _updateOrCreateMeshCollider = serializedObject.FindProperty("updateOrCreateMeshCollider");
+        _generateUVMap = serializedObject.FindProperty("generateUVMap");
+        _destroyCombinedChildren = serializedObject.FindProperty("destroyCombinedChildren");
+        _folderPath = serializedObject.FindProperty("folderPath");
+    }
 
-		#region MeshFiltersToSkip array:
-		SerializedProperty meshFiltersToSkip = serializedObject.FindProperty("meshFiltersToSkip");
-		EditorGUI.BeginChangeCheck();
-		EditorGUILayout.PropertyField(meshFiltersToSkip, true);
-		if(EditorGUI.EndChangeCheck())
-		{
-			serializedObject.ApplyModifiedProperties();
-		}
-		#endregion MeshFiltersToSkip array.
+    public override void OnInspectorGUI()
+    {
+        serializedObject.Update();
 
-		#region Button which combine Meshes into one Mesh & Toggles with combine options:
-		// Button:
-		if(GUILayout.Button("Combine Meshes"))
-		{
-			meshCombiner.CombineMeshes(true);
-		}
+        MeshCombiner meshCombiner = (MeshCombiner)target;
+        MeshFilter meshFilter = meshCombiner.GetComponent<MeshFilter>();
+        Mesh mesh = meshFilter.sharedMesh;
 
-		// Toggles:
-		meshCombiner.CreateMultiMaterialMesh = GUILayout.Toggle(meshCombiner.CreateMultiMaterialMesh, "Create Multi-Material Mesh");
-		meshCombiner.CombineInactiveChildren = GUILayout.Toggle(meshCombiner.CombineInactiveChildren, "Combine Inactive Children");
+        using (new EditorGUI.DisabledScope(true))
+        {
+            EditorGUILayout.ObjectField(
+                "Script",
+                MonoScript.FromMonoBehaviour(meshCombiner),
+                typeof(MeshCombiner),
+                false);
+        }
 
-		meshCombiner.DeactivateCombinedChildren = GUILayout.Toggle(meshCombiner.DeactivateCombinedChildren, "Deactivate Combined Children");
-		meshCombiner.DeactivateCombinedChildrenMeshRenderers = GUILayout.Toggle(meshCombiner.DeactivateCombinedChildrenMeshRenderers,
-			"Deactivate Combined Children's MeshRenderers");
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Combine", EditorStyles.boldLabel);
+        EditorGUILayout.PropertyField(
+            _createMultiMaterialMesh,
+            new GUIContent(
+                "Create Multi-Material Mesh",
+                "Preserves different materials as submeshes. Disable only when all source submeshes use the same material."));
+        EditorGUILayout.PropertyField(_combineInactiveChildren, new GUIContent("Combine Inactive Children"));
+        EditorGUILayout.PropertyField(
+            _meshFiltersToSkip,
+            new GUIContent("Mesh Filters To Skip"),
+            true);
 
-		meshCombiner.GenerateUVMap = GUILayout.Toggle(meshCombiner.GenerateUVMap, new GUIContent("Generate UV Map", "It is a slow operation that "+
-			"generates a UV map (required for the lightmap).\n\nCan be used only in the Editor."));
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
+        EditorGUILayout.PropertyField(
+            _deactivateCombinedChildren,
+            new GUIContent("Deactivate Combined Children"));
+        EditorGUILayout.PropertyField(
+            _deactivateCombinedChildrenMeshRenderers,
+            new GUIContent("Disable Child MeshRenderers"));
+        EditorGUILayout.PropertyField(
+            _updateOrCreateMeshCollider,
+            new GUIContent(
+                "Update/Create MeshCollider",
+                "Assigns the final combined render mesh to a MeshCollider on this GameObject. " +
+                "This fixes the upstream 'Missing collider' case, but does not combine custom primitive colliders."));
+        EditorGUILayout.PropertyField(
+            _generateUVMap,
+            new GUIContent(
+                "Generate Lightmap UV2",
+                "Generates a fresh secondary UV set after combining. " +
+                "The destination is also marked Contribute GI and Receive GI = Lightmaps in Edit Mode."));
 
-		// The last (6) "Destroy Combined Children" Toggle:
-		GUIStyle style = new GUIStyle(EditorStyles.toggle);
-		if(meshCombiner.DestroyCombinedChildren)
-		{
-			style.onNormal.textColor = new Color(1, 0.15f, 0);
-		}
-		meshCombiner.DestroyCombinedChildren = GUILayout.Toggle(meshCombiner.DestroyCombinedChildren,
-			new GUIContent("Destroy Combined Children", "In the editor this operation can NOT be undone!\n\n"+
-			"If you want to bring back destroyed GameObjects, you have to load again the scene without saving."), style);
-		#endregion Button which combine Meshes into one Mesh & Toggles with combine options.
+        EditorGUILayout.PropertyField(
+            _destroyCombinedChildren,
+            new GUIContent(
+                "Destroy Combined Children",
+                "Destructive mode. Prefer deactivating the source hierarchy so the operation remains reversible."));
 
-		#region Path to the folder where combined Meshes will be saved:
-		// Create Labels:
-		GUILayout.Label("");
-		GUILayout.Label(new GUIContent("Folder path:", "Folder path to save combined Mesh."));
+        if (_destroyCombinedChildren.boolValue)
+        {
+            _deactivateCombinedChildren.boolValue = false;
+            _deactivateCombinedChildrenMeshRenderers.boolValue = false;
+        }
 
-		// Create style wherein text color will be red if folder path is not valid:
-		style = new GUIStyle(EditorStyles.textField);
-		bool isValidPath = IsValidPath(meshCombiner.FolderPath);
-		if(!isValidPath)
-		{
-			style.normal.textColor = Color.red;
-			style.focused.textColor = Color.red;
-		}
+        if (_destroyCombinedChildren.boolValue)
+        {
+            EditorGUILayout.HelpBox(
+                "Destructive mode is enabled. Undo is supported in the Editor, but keeping source objects deactivated is safer for production workflows.",
+                MessageType.Warning);
+        }
 
-		// Create TextField with custom style:
-		meshCombiner.FolderPath = EditorGUILayout.TextField(meshCombiner.FolderPath, style);
-		#endregion Path to the folder where combined Meshes will be saved.
+        if (_updateOrCreateMeshCollider.boolValue &&
+            !_deactivateCombinedChildren.boolValue &&
+            _deactivateCombinedChildrenMeshRenderers.boolValue)
+        {
+            EditorGUILayout.HelpBox(
+                "Child GameObjects stay active, so their existing Colliders also stay active. " +
+                "Adding a combined MeshCollider can create duplicate collision. Disable/remove child Colliders yourself if that is not intended.",
+                MessageType.Warning);
+        }
 
-		#region Button which save/show combined Mesh:
-		bool meshIsSaved = (mesh != null && AssetDatabase.Contains(mesh));
-		GUI.enabled = (mesh != null && (isValidPath || meshIsSaved)); // Valid path is required for not saved Mesh.
-		string saveMeshButtonText = (meshIsSaved) ? "Show Saved Combined Mesh" : "Save Combined Mesh";
+        if (_generateUVMap.boolValue)
+        {
+            EditorGUILayout.HelpBox(
+                "UV2 generation uses a 32-bit index buffer before unwrapping. Unity can split vertices while generating lightmap charts, " +
+                "so this avoids the 65,535 vertex failure mode.",
+                MessageType.Info);
+        }
 
-		if(GUILayout.Button(saveMeshButtonText))
-		{
-			meshCombiner.FolderPath = SaveCombinedMesh(mesh, meshCombiner.FolderPath);
-		}
-		GUI.enabled = true;
-		#endregion Button which save/show combined Mesh.
-	}
+        serializedObject.ApplyModifiedProperties();
 
-	private bool IsValidPath(string folderPath)
-	{
-		string pattern = "[:*?\"<>|]"; // Prohibited characters.
-		Regex regex = new Regex(pattern);
-		return (!regex.IsMatch(folderPath));
-	}
+        EditorGUILayout.Space();
+        if (GUILayout.Button("Combine Meshes", GUILayout.Height(28)))
+        {
+            Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Combine Meshes");
 
-	private string SaveCombinedMesh(Mesh mesh, string folderPath)
-	{
-		bool meshIsSaved = AssetDatabase.Contains(mesh); // If is saved then only show it in the project view.
+            if (meshCombiner.TryCombineMeshes(true))
+            {
+                EditorUtility.SetDirty(meshCombiner);
+                EditorUtility.SetDirty(meshFilter);
+                EditorUtility.SetDirty(meshCombiner.GetComponent<MeshRenderer>());
+            }
+        }
 
-		#region Create directories if Mesh and path doesn't exists:
-		folderPath = folderPath.Replace('\\', '/');
-		if(!meshIsSaved && !AssetDatabase.IsValidFolder("Assets/"+folderPath))
-		{
-			string[] folderNames = folderPath.Split('/');
-			folderNames = folderNames.Where((folderName) => !folderName.Equals("")).ToArray();
-			folderNames = folderNames.Where((folderName) => !folderName.Equals(" ")).ToArray();
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Combined Mesh Asset", EditorStyles.boldLabel);
 
-			folderPath = "/"; // Reset folder path.
-			for(int i = 0; i < folderNames.Length; i++)
-			{
-				folderNames[i] = folderNames[i].Trim();
-				if(!AssetDatabase.IsValidFolder("Assets"+folderPath+folderNames[i]))
-				{
-					string folderPathWithoutSlash = folderPath.Substring(0, folderPath.Length-1); // Delete last "/" character.
-					AssetDatabase.CreateFolder("Assets"+folderPathWithoutSlash, folderNames[i]);
-				}
-				folderPath += folderNames[i]+"/";
-			}
-			folderPath = folderPath.Substring(1, folderPath.Length-2); // Delete first and last "/" character.
-		}
-		#endregion Create directories if Mesh and path doesn't exists.
+        serializedObject.Update();
+        EditorGUILayout.PropertyField(
+            _folderPath,
+            new GUIContent(
+                "Folder Path",
+                "Path under Assets where the generated Mesh asset will be saved."));
+        serializedObject.ApplyModifiedProperties();
 
-		#region Save Mesh:
-		if(!meshIsSaved)
-		{
-			string meshPath = "Assets/"+folderPath+"/"+mesh.name+".asset";
-			int assetNumber = 1;
-			while(AssetDatabase.LoadAssetAtPath(meshPath, typeof(Mesh)) != null) // If Mesh with same name exists, change name.
-			{
-				meshPath = "Assets/"+folderPath+"/"+mesh.name+" ("+assetNumber+").asset";
-				assetNumber++;
-			}
+        string folderPath = meshCombiner.FolderPath;
+        bool isValidPath = IsValidPath(folderPath);
+        mesh = meshFilter.sharedMesh;
+        bool meshIsSaved = mesh != null && AssetDatabase.Contains(mesh);
 
-			AssetDatabase.CreateAsset(mesh, meshPath);
-			AssetDatabase.SaveAssets();
-			Debug.Log("<color=#ff9900><b>Mesh \""+mesh.name+"\" was saved in the \""+folderPath+"\" folder.</b></color>"); // Show info about saved mesh.
-		}
-		#endregion Save Mesh.
+        if (!isValidPath)
+        {
+            EditorGUILayout.HelpBox(
+                "Folder path is invalid. Use a relative path under Assets, for example Generated/CombinedMeshes.",
+                MessageType.Error);
+        }
 
-		EditorGUIUtility.PingObject(mesh); // Show Mesh in the project view.
-		return folderPath;
-	}
+        using (new EditorGUI.DisabledScope(mesh == null || (!isValidPath && !meshIsSaved)))
+        {
+            string saveMeshButtonText = meshIsSaved
+                ? "Show Saved Combined Mesh"
+                : "Save Combined Mesh";
+
+            if (GUILayout.Button(saveMeshButtonText))
+            {
+                meshCombiner.FolderPath = SaveCombinedMesh(mesh, folderPath);
+                EditorUtility.SetDirty(meshCombiner);
+            }
+        }
+    }
+
+    private static bool IsValidPath(string folderPath)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath))
+        {
+            return false;
+        }
+
+        string normalized = folderPath.Replace('\\', '/').Trim('/');
+        if (string.IsNullOrWhiteSpace(normalized) || normalized.StartsWith("Assets/"))
+        {
+            return false;
+        }
+
+        const string pattern = "[:*?\"<>|]";
+        return !Regex.IsMatch(normalized, pattern);
+    }
+
+    private static string SaveCombinedMesh(Mesh mesh, string folderPath)
+    {
+        if (mesh == null)
+        {
+            return folderPath;
+        }
+
+        if (AssetDatabase.Contains(mesh))
+        {
+            EditorGUIUtility.PingObject(mesh);
+            return folderPath;
+        }
+
+        folderPath = folderPath.Replace('\\', '/').Trim('/');
+        EnsureFolderExists(folderPath);
+
+        string meshPath = AssetDatabase.GenerateUniqueAssetPath(
+            "Assets/" + folderPath + "/" + mesh.name + ".asset");
+
+        AssetDatabase.CreateAsset(mesh, meshPath);
+        AssetDatabase.SaveAssets();
+
+        EditorGUIUtility.PingObject(mesh);
+        Debug.Log("Mesh Combiner: saved combined mesh to \"" + meshPath + "\".");
+
+        string directory = System.IO.Path.GetDirectoryName(meshPath);
+        if (string.IsNullOrEmpty(directory))
+        {
+            return folderPath;
+        }
+
+        directory = directory.Replace('\\', '/');
+        return directory.StartsWith("Assets/")
+            ? directory.Substring("Assets/".Length)
+            : folderPath;
+    }
+
+    private static void EnsureFolderExists(string folderPath)
+    {
+        string currentPath = "Assets";
+
+        foreach (string rawFolderName in folderPath.Split('/').Where(part => !string.IsNullOrWhiteSpace(part)))
+        {
+            string folderName = rawFolderName.Trim();
+            string nextPath = currentPath + "/" + folderName;
+
+            if (!AssetDatabase.IsValidFolder(nextPath))
+            {
+                AssetDatabase.CreateFolder(currentPath, folderName);
+            }
+
+            currentPath = nextPath;
+        }
+    }
 }
