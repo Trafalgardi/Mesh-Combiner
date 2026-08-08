@@ -1,8 +1,8 @@
 # Mesh Combiner for Unity
 
-A Unity editor/runtime utility for combining child `MeshFilter` meshes into a single mesh to reduce renderer/draw-call overhead.
+A Unity 6 editor/runtime utility for combining child `MeshFilter` meshes into a single mesh to reduce renderer/draw-call overhead, with a workflow aimed at static geometry and baked lighting.
 
-This fork modernizes the original project for **Unity 6**, with special attention to static geometry and baked lighting.
+This repository is a modernized fork of `dawid-t/Mesh-Combiner`.
 
 ## Install via Unity Package Manager
 
@@ -17,13 +17,13 @@ This fork modernizes the original project for **Unity 6**, with special attentio
 https://github.com/Trafalgardi/Mesh-Combiner.git
 ```
 
-Until the Unity 6 PR is merged into `master`, install the development branch:
+Until the Unity 6 modernization PR is merged, install the development branch instead:
 
 ```text
 https://github.com/Trafalgardi/Mesh-Combiner.git#agent/unity6-modernization
 ```
 
-The repository contains `package.json` at its root, so no `?path=` suffix is required.
+The repository contains `package.json` in the root, so no `?path=` suffix is required.
 
 ### Packages/manifest.json
 
@@ -35,123 +35,138 @@ The repository contains `package.json` at its root, so no `?path=` suffix is req
 }
 ```
 
-Git must be installed and available in `PATH` for Unity Package Manager Git dependencies.
+Git must be installed and available in `PATH` for Git-based Unity Package Manager dependencies.
 
 ### Updating a Git branch installation
 
-Unity records the resolved Git commit in `Packages/packages-lock.json`. Use Package Manager **Update** when available. If Unity keeps an old branch commit, remove the `com.trafalgardi.mesh-combiner` entry from `Packages/packages-lock.json` and let Unity resolve the dependency again, or remove/re-add the package.
+Unity pins the resolved Git commit in `Packages/packages-lock.json`. If Package Manager does not show an Update action, remove the `com.trafalgardi.mesh-combiner` lock entry or remove/re-add the package URL.
 
 ## Requirements
 
 - Unity 6.0 (`6000.0`) or newer.
-- Git available in `PATH` for Git UPM installs.
+- Git in `PATH` for UPM Git installation.
 - Runtime combining requires source meshes with `Read/Write Enabled`.
 
 Package ID: `com.trafalgardi.mesh-combiner`
 
-Current package version: **2.1.0**
+Current version: **2.1.1**
 
 ## Main features
 
-- transform-safe combining without temporarily unparenting/resetting the destination object;
-- all submeshes preserved;
-- multi-material grouping by actual material;
-- automatic UInt16/UInt32 selection;
+- transform-safe combining without temporarily unparenting/resetting the destination;
+- single-material and multi-material/submesh preservation;
+- automatic UInt16/UInt32 index selection;
+- optional combined `MeshCollider`;
 - aggregated validation logs;
-- optional `Update/Create MeshCollider`;
-- exact-state **Restore / Undo Combine**;
-- generated Mesh asset saving;
-- Unity Package Manager support;
-- explicit lightmap UV workflows for Unity 6.
+- `Contribute GI`, `Receive GI = Lightmaps`, and seam-stitch setup for lightmapped output;
+- exact-state **Restore / Undo Combine** workflow in the Editor;
+- combined mesh asset saving;
+- multiple lightmap UV2 workflows.
 
-## Lightmap UV modes
+## Lightmap UV Mode
 
-### Preserve & Repack Source UV2 — recommended for modular static geometry
-
-Use this when source meshes already have valid lightmap UVs.
-
-The combiner keeps each source mesh's existing `Mesh.uv2` charts and only scales/offsets the whole source UV2 layout into a non-overlapping cell in the final combined `0..1` UV space.
-
-This avoids a full `GenerateSecondaryUVSet` pass over the complete building, so it does **not** intentionally split the mesh into a new chart layout.
-
-The mode validates that every source mesh has a non-degenerate UV2 channel. If any source mesh has no usable UV2, combine stops and reports the affected meshes; switch to **Regenerate UV2** or fix the model import settings.
-
-`Repack Padding` is normalized atlas padding around each source-mesh UV rectangle. Default: `0.002`, approximately one pixel at a 512px lightmap.
-
-### Preserve Source UV2
-
-Copies source UV2 without repacking. This is mainly a diagnostic mode. Repeated modular meshes generally occupy the same `0..1` UV area, so the combined result will usually contain UV overlaps.
-
-### Regenerate UV2
-
-Combines geometry first and then runs Unity's `Unwrapping.GenerateSecondaryUVSet` over the complete combined mesh.
-
-This can create new UV charts, split vertices and change baked seams. In the test modular wall scene it increased the combined mesh from **10,616 vertices to 14,940 vertices** while triangle count stayed at **5,320**.
-
-The combiner no longer forces UInt32 just because regeneration is enabled. It uses source index counts as an upper bound: if the regenerated mesh cannot possibly exceed 65,535 vertices, it stays UInt16.
+The Inspector exposes four modes.
 
 ### None
 
-No special lightmap UV processing. Use this for non-lightmapped output or if another pipeline will generate UV2 later.
+Does not process lightmap UVs.
 
-## Recommended lightmapping workflow
+Use this when the output will not use baked lightmaps or when another system will prepare UV2 later.
 
-1. Add `MeshCombiner` to the root GameObject with `MeshFilter` and `MeshRenderer`.
-2. Put the static source meshes below it.
-3. Enable **Create Multi-Material Mesh** when more than one material is used.
-4. Set **Lightmap UV Mode -> Preserve And Repack Source UV2** for imported modular assets that already contain UV2.
-5. Keep **Destroy Combined Children** disabled.
+### Preserve Source UV2
+
+Keeps source `Mesh.uv2` values unchanged.
+
+This is mainly diagnostic. Modular meshes commonly reuse the same 0..1 UV2 range, so after combining their charts can overlap.
+
+### Preserve And Repack Source UV2
+
+**Recommended test mode for modular static geometry that already has valid UV2.**
+
+Version 2.1.1 detects the existing UV2 charts in every source mesh and packs all charts into one final 0..1 UV2 atlas.
+
+Important properties of this mode:
+
+- it keeps the existing chart topology;
+- it does not call `GenerateSecondaryUVSet`;
+- it does not intentionally split vertices;
+- all charts use **one global scale**, so adjacent modular pieces keep their relative lightmap texel density;
+- every chart gets an explicit padding border;
+- temporary UV2-modified mesh copies are used during combine, so source assets are not modified.
+
+The first 2.1.0 repack experiment packed whole source meshes into equal cells and scaled each source independently. Real-scene testing showed that this changed texel density exactly at modular boundaries and produced visible baked seams. 2.1.1 replaces that approach with chart-level packing.
+
+#### Chart Padding (texels)
+
+Default: `2`.
+
+Reserves a border around every UV2 chart. If **UV Overlap** visualization still shows red chart neighborhoods, increase this value.
+
+#### Padding Reference Size
+
+Default: `512`.
+
+Padding is converted to normalized UV space using this reference resolution. A 2-texel padding at a 512 reference size is intentionally conservative when the final scene lightmap is 1024.
+
+### Regenerate UV2
+
+Runs Unity's `Unwrapping.GenerateSecondaryUVSet` on the final combined mesh.
+
+This can produce a completely different chart layout and can split vertices. In real modular-wall testing it increased the combined mesh from **10,616** to **14,940** vertices while triangle count stayed at **5,320**, and it changed visible baked seams.
+
+Use this as a fallback when source meshes do not have usable lightmap UVs.
+
+## Recommended baked-light workflow
+
+1. Put the static meshes below a root object.
+2. Add `MeshFilter`, `MeshRenderer`, and `MeshCombiner` to the root.
+3. Enable **Create Multi-Material Mesh** when required.
+4. Start with **Lightmap UV Mode = Preserve And Repack Source UV2**.
+5. Keep **Chart Padding = 2** and **Padding Reference Size = 512** for the first test.
 6. Click **Combine Meshes**.
-7. Check the generated mesh vertex/triangle counts.
-8. In Scene View inspect **Baked GI -> UV Overlap** and **Texel Validity**.
-9. Bake lighting and compare seams/lightmap size against the uncombined source hierarchy.
-10. Click **Restore / Undo Combine** before the next A/B test.
-
-Any lightmap UV mode other than `None` marks the destination as `Contribute GI`, sets `Receive GI = Lightmaps`, and enables lightmap seam stitching in Edit Mode.
+7. Check mesh vertex/triangle count.
+8. Check Scene View **UV Overlap** and **Texel Validity**.
+9. Bake lighting.
+10. Use **Restore / Undo Combine** before another A/B comparison.
 
 ## Restore / Undo Combine
 
-Immediately before combine, the custom Editor records the active state of child MeshFilter GameObjects and the enabled state of their MeshRenderers in Unity `SessionState`.
+The custom Inspector records source hierarchy state immediately before combine in Unity `SessionState`.
 
-**Restore / Undo Combine**:
+Restore:
 
-- clears the destination combined mesh and materials;
-- clears the generated MeshCollider mesh reference when applicable;
-- restores only the GameObjects/Renderers changed by the combine operation to their exact pre-combine state;
-- keeps source helpers/variants that were already inactive before combine inactive;
-- removes unsaved transient combined Mesh objects through Unity Undo;
-- keeps a combined Mesh already saved as a `.asset`.
+- clears the destination combined mesh;
+- clears destination materials;
+- clears the generated MeshCollider reference when applicable;
+- restores each source GameObject to its exact previous `activeSelf` state;
+- restores each source MeshRenderer to its exact previous `enabled` state;
+- does not activate helpers/variants that were already disabled;
+- removes an unsaved transient output mesh through Unity Undo;
+- keeps saved `.asset` meshes.
 
-**Destroy Combined Children** is destructive and cannot use exact restore.
+The restore snapshot is Editor-session scoped. **Destroy Combined Children** is destructive and cannot use exact restore.
 
-## Missing collider issue
+## MeshCollider
 
-The original implementation only replaced `MeshFilter.sharedMesh`. It did not update/create a `MeshCollider`, which caused upstream issue #2 ("Missing colider").
+Enable **Update/Create MeshCollider** to assign the combined render mesh to a MeshCollider on the destination object.
 
-Enable **Update/Create MeshCollider** to assign the combined render mesh to a destination `MeshCollider`.
-
-This does not merge Box/Capsule/Sphere colliders or preserve custom low-poly child collision meshes.
+This addresses the original upstream "Missing colider" issue. It does not merge Box/Sphere/Capsule colliders or preserve custom low-poly collision meshes.
 
 ## Runtime combining
 
-Runtime combining requires source meshes to be CPU-readable (`Read/Write Enabled`). For static level geometry it is usually better to combine in the Editor, save the generated mesh asset, and ship the saved result.
+Runtime combining requires CPU-readable source meshes (`Read/Write Enabled`). For static level geometry it is normally better to combine in the Editor, save the generated mesh asset, and ship the saved result.
 
-In Edit Mode, non-readable source meshes are accepted and reported in one informational log instead of one warning per source mesh.
+## What this tool still does not do
 
-## Geometry cleanup: not implemented yet
+`Mesh.CombineMeshes` is not a topology union operation. This fork currently does not:
 
-`Mesh.CombineMeshes` combines vertex/index data. It is **not** a Boolean union or topology optimizer.
-
-This version does not yet:
-
-- weld coincident vertices;
-- remove duplicate/internal faces where meshes touch;
-- close gaps;
-- repair normals;
+- weld coincident geometry vertices;
+- remove internal coplanar faces where modular meshes touch;
+- close geometry gaps;
 - perform Boolean union/intersection;
-- simplify topology.
+- simplify mesh topology.
 
-If two cubes touch face-to-face, both internal faces still exist after combine.
+If two cubes touch face-to-face, their hidden internal faces still exist after combine. Topology welding/internal-face removal should remain a separate opt-in step because blindly merging geometry can break hard normals, UV seams, materials, and intentional interior surfaces.
 
 ## Basic code use
 
@@ -163,8 +178,8 @@ combiner.UpdateOrCreateMeshCollider = true;
 combiner.CombineMeshes(true);
 ```
 
-The exact source-state restore is an Editor inspector workflow because it relies on the pre-combine Editor snapshot.
+The exact-state Restore snapshot is an Editor Inspector workflow and is intentionally not exposed as a runtime restoration API.
 
-## Original project
+## License
 
-This repository is a fork of `dawid-t/Mesh-Combiner` and remains under the MIT License.
+MIT, following the original project.
