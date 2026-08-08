@@ -2,6 +2,33 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.6.0-dev.1] - 2026-08-09
+
+### Added
+
+- Added permanent `dev` branch as the active UPM development channel (`https://github.com/Trafalgardi/Mesh-Combiner.git#dev`).
+- Added non-destructive **Analyze / Validate** preflight directly in the custom Inspector.
+- Analyzer reports included and ignored source MeshFilters, renderer/submesh/material estimates, vertex/triangle counts, expected index format, and blocking/warning/info diagnostics.
+- Ignored sources are shown as a read-only grouped list with explicit reasons: User Ignore, inactive hierarchy, missing Mesh, missing MeshRenderer, disabled MeshRenderer, and nested exact duplicate.
+- Existing `meshFiltersToSkip` input is presented as an explicit **User Ignore List** instead of looking like an internal implementation detail.
+- `Combine Meshes` now reruns Analyzer preflight before hierarchy mutation and refuses to start when blocking analyzer errors are present.
+- Added preflight checks for single-material incompatibility, insufficient material slots, null materials, source UV2 requirements, non-triangle topology in UV workflows, and runtime Read/Write restrictions.
+
+### Inspector
+
+- Reworked the Inspector into foldout sections: Sources & Analyzer, Combine, Lightmap UV2, Geometry Cleanup, Output, Actions & Recovery, and Combined Mesh Asset.
+- Settings are contextual: controls are hidden when they do not affect the selected mode.
+- Added detailed tooltips to the main toggles/options so behavior and trade-offs can be understood inside Unity without opening the README.
+- Chart packing options are shown only for UV modes that actually pack charts.
+- Exact-face position tolerance is shown only when exact opposing-face cleanup is enabled.
+- Child MeshRenderer disabling is shown only when whole source GameObjects are not being deactivated.
+- Destructive child deletion is separated into an explicit advanced/destructive subsection.
+
+### Documentation
+
+- Documented stable `master` vs moving `dev` UPM channels.
+- Added Analyzer workflow, ignore reasons, preflight behavior, and T-junction safety constraints to README.
+
 ## [2.5.0] - 2026-08-09
 
 ### Added
