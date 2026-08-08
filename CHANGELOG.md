@@ -2,6 +2,14 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.1.2] - 2026-08-08
+
+### Fixed
+
+- Fixed Unity 6 Editor compilation errors in the `Padding Reference Size` popup.
+- The `GUIContent` label overload of `EditorGUILayout.IntPopup` now receives `GUIContent[]` display options as required by the Unity Editor API.
+- No lightmap UV packing behavior changed from 2.1.1.
+
 ## [2.1.1] - 2026-08-08
 
 ### Fixed
