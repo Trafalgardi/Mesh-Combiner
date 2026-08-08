@@ -9,23 +9,38 @@ public static class MeshCoplanarLightmapUv
     private const float MinimumArea = 0.0000000001f;
     private const float MinimumExtent = 0.000001f;
     private const float PackingEpsilon = 0.000001f;
+    private const float MaximumPartialEdgeDirectionAngle = 1f;
 
     public readonly struct Result
     {
         public readonly int triangleCount;
         public readonly int chartCount;
         public readonly int stitchedEdgeConnections;
+        public readonly int exactEdgeConnections;
+        public readonly int partialCollinearEdgeConnections;
+        public readonly int boundaryEdgeCount;
         public readonly int assignedVertexCount;
         public readonly float packingScale;
         public readonly float positionTolerance;
         public readonly float coplanarAngleDegrees;
 
-        public Result(int triangleCount, int chartCount, int stitchedEdgeConnections, int assignedVertexCount,
-            float packingScale, float positionTolerance, float coplanarAngleDegrees)
+        public Result(
+            int triangleCount,
+            int chartCount,
+            int exactEdgeConnections,
+            int partialCollinearEdgeConnections,
+            int boundaryEdgeCount,
+            int assignedVertexCount,
+            float packingScale,
+            float positionTolerance,
+            float coplanarAngleDegrees)
         {
             this.triangleCount = triangleCount;
             this.chartCount = chartCount;
-            this.stitchedEdgeConnections = stitchedEdgeConnections;
+            this.exactEdgeConnections = exactEdgeConnections;
+            this.partialCollinearEdgeConnections = partialCollinearEdgeConnections;
+            stitchedEdgeConnections = exactEdgeConnections + partialCollinearEdgeConnections;
+            this.boundaryEdgeCount = boundaryEdgeCount;
             this.assignedVertexCount = assignedVertexCount;
             this.packingScale = packingScale;
             this.positionTolerance = positionTolerance;
@@ -56,6 +71,7 @@ public static class MeshCoplanarLightmapUv
 
         public bool Equals(QuantizedPoint other) => _x == other._x && _y == other._y && _z == other._z;
         public override bool Equals(object obj) => obj is QuantizedPoint other && Equals(other);
+
         public override int GetHashCode()
         {
             unchecked
@@ -91,9 +107,29 @@ public static class MeshCoplanarLightmapUv
 
         public bool Equals(EdgeKey other) => _a.Equals(other._a) && _b.Equals(other._b);
         public override bool Equals(object obj) => obj is EdgeKey other && Equals(other);
+
         public override int GetHashCode()
         {
-            unchecked { return (_a.GetHashCode() * 397) ^ _b.GetHashCode(); }
+            unchecked
+            {
+                return (_a.GetHashCode() * 397) ^ _b.GetHashCode();
+            }
+        }
+    }
+
+    private readonly struct EdgeRecord
+    {
+        public readonly Vector3 a;
+        public readonly Vector3 b;
+        public readonly int triangleIndex;
+        public readonly Vector3 normal;
+
+        public EdgeRecord(Vector3 a, Vector3 b, int triangleIndex, Vector3 normal)
+        {
+            this.a = a;
+            this.b = b;
+            this.triangleIndex = triangleIndex;
+            this.normal = normal;
         }
     }
 
@@ -108,7 +144,15 @@ public static class MeshCoplanarLightmapUv
         public readonly Vector3 normal;
         public readonly float area;
 
-        public Triangle(int a, int b, int c, Vector3 worldA, Vector3 worldB, Vector3 worldC, Vector3 normal, float area)
+        public Triangle(
+            int a,
+            int b,
+            int c,
+            Vector3 worldA,
+            Vector3 worldB,
+            Vector3 worldC,
+            Vector3 normal,
+            float area)
         {
             this.a = a;
             this.b = b;
@@ -157,6 +201,7 @@ public static class MeshCoplanarLightmapUv
                 _parent[value] = root;
                 value = next;
             }
+
             return root;
         }
 
@@ -165,6 +210,7 @@ public static class MeshCoplanarLightmapUv
             int rootA = Find(a);
             int rootB = Find(b);
             if (rootA == rootB) return false;
+
             if (_rank[rootA] < _rank[rootB]) _parent[rootA] = rootB;
             else if (_rank[rootA] > _rank[rootB]) _parent[rootB] = rootA;
             else
@@ -172,16 +218,24 @@ public static class MeshCoplanarLightmapUv
                 _parent[rootB] = rootA;
                 _rank[rootA]++;
             }
+
             return true;
         }
     }
 
-    public static bool TryGenerate(Mesh mesh, Matrix4x4 localToWorld, float positionTolerance,
-        float coplanarAngleDegrees, int paddingTexels, int paddingReferenceResolution,
-        out Result result, out string error)
+    public static bool TryGenerate(
+        Mesh mesh,
+        Matrix4x4 localToWorld,
+        float positionTolerance,
+        float coplanarAngleDegrees,
+        int paddingTexels,
+        int paddingReferenceResolution,
+        out Result result,
+        out string error)
     {
         result = default;
         error = null;
+
         if (mesh == null)
         {
             error = "Mesh is null.";
@@ -202,6 +256,7 @@ public static class MeshCoplanarLightmapUv
 
         if (!TryReadTriangles(mesh, localVertices, localToWorld, out List<Triangle> triangles, out error))
             return false;
+
         if (triangles.Count == 0)
         {
             error = "Mesh has no non-degenerate triangles.";
@@ -211,19 +266,59 @@ public static class MeshCoplanarLightmapUv
         double inverseTolerance = 1.0 / positionTolerance;
         float minimumNormalDot = Mathf.Cos(coplanarAngleDegrees * Mathf.Deg2Rad);
         DisjointSet sets = new DisjointSet(triangles.Count);
-        Dictionary<EdgeKey, List<int>> edgeOwners = new Dictionary<EdgeKey, List<int>>();
-        int stitchedEdgeConnections = 0;
+        Dictionary<EdgeKey, List<EdgeRecord>> edgeOwners = new Dictionary<EdgeKey, List<EdgeRecord>>();
+        int exactEdgeConnections = 0;
 
         for (int triangleIndex = 0; triangleIndex < triangles.Count; triangleIndex++)
         {
             Triangle triangle = triangles[triangleIndex];
-            RegisterEdge(new EdgeKey(triangle.worldA, triangle.worldB, inverseTolerance), triangleIndex,
-                triangle.normal, triangles, minimumNormalDot, sets, edgeOwners, ref stitchedEdgeConnections);
-            RegisterEdge(new EdgeKey(triangle.worldB, triangle.worldC, inverseTolerance), triangleIndex,
-                triangle.normal, triangles, minimumNormalDot, sets, edgeOwners, ref stitchedEdgeConnections);
-            RegisterEdge(new EdgeKey(triangle.worldC, triangle.worldA, inverseTolerance), triangleIndex,
-                triangle.normal, triangles, minimumNormalDot, sets, edgeOwners, ref stitchedEdgeConnections);
+            RegisterEdge(
+                triangle.worldA,
+                triangle.worldB,
+                triangleIndex,
+                triangle.normal,
+                inverseTolerance,
+                triangles,
+                minimumNormalDot,
+                sets,
+                edgeOwners,
+                ref exactEdgeConnections);
+            RegisterEdge(
+                triangle.worldB,
+                triangle.worldC,
+                triangleIndex,
+                triangle.normal,
+                inverseTolerance,
+                triangles,
+                minimumNormalDot,
+                sets,
+                edgeOwners,
+                ref exactEdgeConnections);
+            RegisterEdge(
+                triangle.worldC,
+                triangle.worldA,
+                triangleIndex,
+                triangle.normal,
+                inverseTolerance,
+                triangles,
+                minimumNormalDot,
+                sets,
+                edgeOwners,
+                ref exactEdgeConnections);
         }
+
+        List<EdgeRecord> boundaryEdges = new List<EdgeRecord>();
+        foreach (List<EdgeRecord> owners in edgeOwners.Values)
+        {
+            if (owners.Count == 1) boundaryEdges.Add(owners[0]);
+        }
+
+        int partialCollinearEdgeConnections = StitchPartialCollinearBoundaryEdges(
+            boundaryEdges,
+            minimumNormalDot,
+            coplanarAngleDegrees,
+            positionTolerance,
+            sets);
 
         Dictionary<int, Chart> chartsByRoot = new Dictionary<int, Chart>();
         for (int triangleIndex = 0; triangleIndex < triangles.Count; triangleIndex++)
@@ -234,6 +329,7 @@ public static class MeshCoplanarLightmapUv
                 chart = new Chart { root = root };
                 chartsByRoot.Add(root, chart);
             }
+
             chart.triangleIndices.Add(triangleIndex);
         }
 
@@ -256,6 +352,7 @@ public static class MeshCoplanarLightmapUv
                             "Use Regenerate UV2 for this mesh or split the source vertex topology.";
                     return false;
                 }
+
                 chartByVertex[vertexIndex] = chartIndex;
             }
         }
@@ -272,20 +369,36 @@ public static class MeshCoplanarLightmapUv
         foreach (Chart chart in charts)
         {
             foreach (KeyValuePair<int, Vector2> pair in chart.projectedByVertex)
+            {
                 uv2[pair.Key] = chart.packedMin + (pair.Value - chart.min) * packingScale;
+            }
         }
+
         mesh.uv2 = uv2;
 
-        result = new Result(triangles.Count, charts.Count, stitchedEdgeConnections, chartByVertex.Count,
-            packingScale, positionTolerance, coplanarAngleDegrees);
+        result = new Result(
+            triangles.Count,
+            charts.Count,
+            exactEdgeConnections,
+            partialCollinearEdgeConnections,
+            boundaryEdges.Count,
+            chartByVertex.Count,
+            packingScale,
+            positionTolerance,
+            coplanarAngleDegrees);
         return true;
     }
 
-    private static bool TryReadTriangles(Mesh mesh, Vector3[] localVertices, Matrix4x4 localToWorld,
-        out List<Triangle> triangles, out string error)
+    private static bool TryReadTriangles(
+        Mesh mesh,
+        Vector3[] localVertices,
+        Matrix4x4 localToWorld,
+        out List<Triangle> triangles,
+        out string error)
     {
         triangles = new List<Triangle>();
         error = null;
+
         for (int subMeshIndex = 0; subMeshIndex < mesh.subMeshCount; subMeshIndex++)
         {
             if (mesh.GetTopology(subMeshIndex) != MeshTopology.Triangles)
@@ -307,7 +420,8 @@ public static class MeshCoplanarLightmapUv
                 int indexA = indices[i];
                 int indexB = indices[i + 1];
                 int indexC = indices[i + 2];
-                if ((uint)indexA >= localVertices.Length || (uint)indexB >= localVertices.Length ||
+                if ((uint)indexA >= localVertices.Length ||
+                    (uint)indexB >= localVertices.Length ||
                     (uint)indexC >= localVertices.Length)
                 {
                     error = "Mesh contains an out-of-range triangle index.";
@@ -320,36 +434,139 @@ public static class MeshCoplanarLightmapUv
                 Vector3 cross = Vector3.Cross(worldB - worldA, worldC - worldA);
                 float doubleArea = cross.magnitude;
                 if (doubleArea <= MinimumArea) continue;
-                triangles.Add(new Triangle(indexA, indexB, indexC, worldA, worldB, worldC,
-                    cross / doubleArea, doubleArea * 0.5f));
+
+                triangles.Add(new Triangle(
+                    indexA,
+                    indexB,
+                    indexC,
+                    worldA,
+                    worldB,
+                    worldC,
+                    cross / doubleArea,
+                    doubleArea * 0.5f));
             }
         }
+
         return true;
     }
 
-    private static void RegisterEdge(EdgeKey edge, int triangleIndex, Vector3 normal, List<Triangle> triangles,
-        float minimumNormalDot, DisjointSet sets, Dictionary<EdgeKey, List<int>> edgeOwners,
-        ref int stitchedEdgeConnections)
+    private static void RegisterEdge(
+        Vector3 a,
+        Vector3 b,
+        int triangleIndex,
+        Vector3 normal,
+        double inverseTolerance,
+        List<Triangle> triangles,
+        float minimumNormalDot,
+        DisjointSet sets,
+        Dictionary<EdgeKey, List<EdgeRecord>> edgeOwners,
+        ref int exactEdgeConnections)
     {
-        if (!edgeOwners.TryGetValue(edge, out List<int> owners))
+        EdgeKey edge = new EdgeKey(a, b, inverseTolerance);
+        if (!edgeOwners.TryGetValue(edge, out List<EdgeRecord> owners))
         {
-            owners = new List<int>(2);
+            owners = new List<EdgeRecord>(2);
             edgeOwners.Add(edge, owners);
         }
 
         for (int ownerIndex = 0; ownerIndex < owners.Count; ownerIndex++)
         {
-            int otherTriangleIndex = owners[ownerIndex];
-            if (Vector3.Dot(normal, triangles[otherTriangleIndex].normal) < minimumNormalDot) continue;
-            if (sets.Union(triangleIndex, otherTriangleIndex)) stitchedEdgeConnections++;
+            EdgeRecord other = owners[ownerIndex];
+            if (Vector3.Dot(normal, triangles[other.triangleIndex].normal) < minimumNormalDot) continue;
+            if (sets.Union(triangleIndex, other.triangleIndex)) exactEdgeConnections++;
         }
-        owners.Add(triangleIndex);
+
+        owners.Add(new EdgeRecord(a, b, triangleIndex, normal));
+    }
+
+    private static int StitchPartialCollinearBoundaryEdges(
+        List<EdgeRecord> boundaryEdges,
+        float minimumNormalDot,
+        float coplanarAngleDegrees,
+        float positionTolerance,
+        DisjointSet sets)
+    {
+        if (boundaryEdges.Count < 2) return 0;
+
+        float directionAngle = Mathf.Min(coplanarAngleDegrees, MaximumPartialEdgeDirectionAngle);
+        float minimumDirectionDot = Mathf.Cos(directionAngle * Mathf.Deg2Rad);
+        int stitchedConnections = 0;
+
+        for (int i = 0; i < boundaryEdges.Count - 1; i++)
+        {
+            EdgeRecord edgeA = boundaryEdges[i];
+            for (int j = i + 1; j < boundaryEdges.Count; j++)
+            {
+                EdgeRecord edgeB = boundaryEdges[j];
+                if (edgeA.triangleIndex == edgeB.triangleIndex) continue;
+                if (sets.Find(edgeA.triangleIndex) == sets.Find(edgeB.triangleIndex)) continue;
+                if (Vector3.Dot(edgeA.normal, edgeB.normal) < minimumNormalDot) continue;
+                if (!ExpandedBoundsOverlap(edgeA, edgeB, positionTolerance)) continue;
+                if (!SegmentsHaveCollinearOverlap(edgeA, edgeB, positionTolerance, minimumDirectionDot)) continue;
+
+                if (sets.Union(edgeA.triangleIndex, edgeB.triangleIndex)) stitchedConnections++;
+            }
+        }
+
+        return stitchedConnections;
+    }
+
+    private static bool ExpandedBoundsOverlap(EdgeRecord a, EdgeRecord b, float tolerance)
+    {
+        Vector3 minA = Vector3.Min(a.a, a.b) - Vector3.one * tolerance;
+        Vector3 maxA = Vector3.Max(a.a, a.b) + Vector3.one * tolerance;
+        Vector3 minB = Vector3.Min(b.a, b.b) - Vector3.one * tolerance;
+        Vector3 maxB = Vector3.Max(b.a, b.b) + Vector3.one * tolerance;
+
+        return minA.x <= maxB.x && maxA.x >= minB.x &&
+               minA.y <= maxB.y && maxA.y >= minB.y &&
+               minA.z <= maxB.z && maxA.z >= minB.z;
+    }
+
+    private static bool SegmentsHaveCollinearOverlap(
+        EdgeRecord a,
+        EdgeRecord b,
+        float tolerance,
+        float minimumDirectionDot)
+    {
+        Vector3 deltaA = a.b - a.a;
+        Vector3 deltaB = b.b - b.a;
+        float lengthA = deltaA.magnitude;
+        float lengthB = deltaB.magnitude;
+        if (lengthA <= tolerance || lengthB <= tolerance) return false;
+
+        Vector3 directionA = deltaA / lengthA;
+        Vector3 directionB = deltaB / lengthB;
+        if (Mathf.Abs(Vector3.Dot(directionA, directionB)) < minimumDirectionDot) return false;
+
+        if (DistancePointToInfiniteLine(b.a, a.a, directionA) > tolerance ||
+            DistancePointToInfiniteLine(b.b, a.a, directionA) > tolerance ||
+            DistancePointToInfiniteLine(a.a, b.a, directionB) > tolerance ||
+            DistancePointToInfiniteLine(a.b, b.a, directionB) > tolerance)
+        {
+            return false;
+        }
+
+        float projectedB0 = Vector3.Dot(b.a - a.a, directionA);
+        float projectedB1 = Vector3.Dot(b.b - a.a, directionA);
+        float bMin = Mathf.Min(projectedB0, projectedB1);
+        float bMax = Mathf.Max(projectedB0, projectedB1);
+        float overlapStart = Mathf.Max(0f, bMin);
+        float overlapEnd = Mathf.Min(lengthA, bMax);
+
+        return overlapEnd - overlapStart > tolerance;
+    }
+
+    private static float DistancePointToInfiniteLine(Vector3 point, Vector3 linePoint, Vector3 lineDirection)
+    {
+        return Vector3.Cross(point - linePoint, lineDirection).magnitude;
     }
 
     private static bool TryBuildChartProjection(Chart chart, List<Triangle> triangles, out string error)
     {
         error = null;
         Vector3 weightedNormal = Vector3.zero;
+
         foreach (int triangleIndex in chart.triangleIndices)
         {
             Triangle triangle = triangles[triangleIndex];
@@ -386,13 +603,16 @@ public static class MeshCoplanarLightmapUv
             error = "A generated coplanar chart is degenerate after planar projection.";
             return false;
         }
+
         return true;
     }
 
     private static void ProjectVertex(Chart chart, int vertexIndex, Vector3 worldPosition)
     {
         if (chart.projectedByVertex.ContainsKey(vertexIndex)) return;
-        Vector2 projected = new Vector2(Vector3.Dot(worldPosition, chart.tangent),
+
+        Vector2 projected = new Vector2(
+            Vector3.Dot(worldPosition, chart.tangent),
             Vector3.Dot(worldPosition, chart.bitangent));
         chart.projectedByVertex.Add(vertexIndex, projected);
         chart.min = Vector2.Min(chart.min, projected);
@@ -403,6 +623,7 @@ public static class MeshCoplanarLightmapUv
     {
         scale = 0f;
         if (charts.Count == 0) return false;
+
         List<Chart> ordered = charts
             .OrderByDescending(chart => chart.max.y - chart.min.y)
             .ThenByDescending(chart => chart.max.x - chart.min.x)
@@ -412,7 +633,8 @@ public static class MeshCoplanarLightmapUv
         float largestWidth = ordered.Max(chart => chart.max.x - chart.min.x);
         float largestHeight = ordered.Max(chart => chart.max.y - chart.min.y);
         float usable = Mathf.Max(MinimumExtent, 1f - padding * 2f);
-        float high = Mathf.Min(usable / Mathf.Max(largestWidth, MinimumExtent),
+        float high = Mathf.Min(
+            usable / Mathf.Max(largestWidth, MinimumExtent),
             usable / Mathf.Max(largestHeight, MinimumExtent));
         if (high <= MinimumExtent) return false;
 
@@ -440,23 +662,27 @@ public static class MeshCoplanarLightmapUv
         float cursorX = 0f;
         float cursorY = 0f;
         float rowHeight = 0f;
+
         foreach (Chart chart in charts)
         {
             Vector2 size = chart.max - chart.min;
             float outerWidth = size.x * scale + padding * 2f;
             float outerHeight = size.y * scale + padding * 2f;
             if (outerWidth > 1f + PackingEpsilon || outerHeight > 1f + PackingEpsilon) return false;
+
             if (cursorX > 0f && cursorX + outerWidth > 1f + PackingEpsilon)
             {
                 cursorY += rowHeight;
                 cursorX = 0f;
                 rowHeight = 0f;
             }
+
             if (cursorY + outerHeight > 1f + PackingEpsilon) return false;
             if (writePlacement) chart.packedMin = new Vector2(cursorX + padding, cursorY + padding);
             cursorX += outerWidth;
             rowHeight = Mathf.Max(rowHeight, outerHeight);
         }
+
         return true;
     }
 }
