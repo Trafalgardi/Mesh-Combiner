@@ -1,6 +1,6 @@
 {
   "name": "com.trafalgardi.mesh-combiner",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "displayName": "Mesh Combiner",
   "description": "Mesh combining utility for Unity 6 with multi-material support, chart-level lightmap UV2 repacking, GI setup, and optional MeshCollider output.",
   "unity": "6000.0",
