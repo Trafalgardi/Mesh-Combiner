@@ -47,6 +47,21 @@ public class MeshCombinerEditor : Editor
     private SerializedProperty _repackPaddingReferenceResolution;
     private SerializedProperty _folderPath;
 
+    private MeshCombinerAnalysisReport _analysisReport;
+    private bool _analysisDirty = true;
+
+    private bool _sourcesExpanded = true;
+    private bool _combineExpanded = true;
+    private bool _lightmapExpanded = true;
+    private bool _geometryExpanded;
+    private bool _outputExpanded = true;
+    private bool _actionsExpanded = true;
+    private bool _assetExpanded;
+    private bool _includedListExpanded;
+    private bool _ignoredListExpanded = true;
+    private bool _issuesExpanded = true;
+    private bool _destructiveExpanded;
+
     private void OnEnable()
     {
         _createMultiMaterialMesh = serializedObject.FindProperty("createMultiMaterialMesh");
@@ -62,6 +77,7 @@ public class MeshCombinerEditor : Editor
         _repackPaddingTexels = serializedObject.FindProperty("repackPaddingTexels");
         _repackPaddingReferenceResolution = serializedObject.FindProperty("repackPaddingReferenceResolution");
         _folderPath = serializedObject.FindProperty("folderPath");
+        _analysisDirty = true;
     }
 
     public override void OnInspectorGUI()
@@ -69,291 +85,655 @@ public class MeshCombinerEditor : Editor
         serializedObject.Update();
 
         MeshCombiner meshCombiner = (MeshCombiner)target;
-        MeshFilter meshFilter = meshCombiner.GetComponent<MeshFilter>();
-        MeshRenderer meshRenderer = meshCombiner.GetComponent<MeshRenderer>();
-        Mesh mesh = meshFilter.sharedMesh;
+        MeshFilter destinationMeshFilter = meshCombiner.GetComponent<MeshFilter>();
+        MeshRenderer destinationMeshRenderer = meshCombiner.GetComponent<MeshRenderer>();
 
         using (new EditorGUI.DisabledScope(true))
         {
             EditorGUILayout.ObjectField("Script", MonoScript.FromMonoBehaviour(meshCombiner), typeof(MeshCombiner), false);
         }
 
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Combine", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(
-            _createMultiMaterialMesh,
-            new GUIContent(
-                "Create Multi-Material Mesh",
-                "Preserves different materials as submeshes. Disable only when all source submeshes use the same material."));
-        EditorGUILayout.PropertyField(_combineInactiveChildren, new GUIContent("Combine Inactive Children"));
-        EditorGUILayout.PropertyField(_meshFiltersToSkip, new GUIContent("Mesh Filters To Skip"), true);
-        EditorGUILayout.HelpBox(
-            "Nested exact duplicates are filtered automatically: if a deeper child uses the same shared Mesh at the same world transform as an ancestor below this root, the deeper child is skipped. This is intended for generic helper/proxy copies and does not depend on object names.",
-            MessageType.Info);
+        if (_analysisReport == null)
+            RunAnalysis(meshCombiner, false);
 
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Geometry Cleanup", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(
-            _removeExactOpposingFaces,
-            new GUIContent(
-                "Remove Exact Opposing Faces",
-                "After combining, removes pairs of coincident triangles that use the same three positions but face in opposite directions. Useful for exact back-to-back internal faces between modular pieces."));
-
-        if (_removeExactOpposingFaces.boolValue)
-        {
-            EditorGUILayout.PropertyField(
-                _exactFacePositionTolerance,
-                new GUIContent(
-                    "Position Tolerance",
-                    "Destination-local position tolerance used when matching the three triangle vertices. Start small; 0.0001 means 0.1 mm when one Unity unit is one meter."));
-            if (_exactFacePositionTolerance.floatValue < 0.000001f)
-                _exactFacePositionTolerance.floatValue = 0.000001f;
-
-            EditorGUILayout.HelpBox(
-                "Opt-in cleanup: any exact coincident triangle pair with opposite winding can be removed, including intentionally double-sided geometry. It removes triangle indices only; the vertex buffer is not compacted, so normals/tangents/UVs and other vertex attributes are left untouched.",
-                MessageType.Warning);
-        }
-        else
-        {
-            EditorGUILayout.HelpBox(
-                "Exact opposing-face cleanup is disabled by default because intentionally double-sided geometry can also contain coincident opposite-wound triangles.",
-                MessageType.Info);
-        }
-
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(_deactivateCombinedChildren, new GUIContent("Deactivate Combined Children"));
-        EditorGUILayout.PropertyField(_deactivateCombinedChildrenMeshRenderers, new GUIContent("Disable Child MeshRenderers"));
-        EditorGUILayout.PropertyField(
-            _updateOrCreateMeshCollider,
-            new GUIContent(
-                "Update/Create MeshCollider",
-                "Assigns the final combined render mesh to a MeshCollider on this GameObject. This does not merge custom primitive colliders."));
-        EditorGUILayout.PropertyField(
-            _destroyCombinedChildren,
-            new GUIContent(
-                "Destroy Combined Children",
-                "Destructive mode. Prefer deactivating the source hierarchy so recovery remains possible."));
-
-        if (_destroyCombinedChildren.boolValue)
-        {
-            _deactivateCombinedChildren.boolValue = false;
-            _deactivateCombinedChildrenMeshRenderers.boolValue = false;
-            EditorGUILayout.HelpBox(
-                "Destructive mode is enabled. Exact Restore and Force Recover cannot reconstruct destroyed child objects. Use Unity Undo immediately if needed.",
-                MessageType.Warning);
-        }
-
-        if (_updateOrCreateMeshCollider.boolValue &&
-            !_deactivateCombinedChildren.boolValue &&
-            _deactivateCombinedChildrenMeshRenderers.boolValue)
-        {
-            EditorGUILayout.HelpBox(
-                "Child GameObjects stay active, so their existing Colliders also stay active. Adding a combined MeshCollider can create duplicate collision.",
-                MessageType.Warning);
-        }
-
-        EditorGUILayout.Space();
+        EditorGUI.BeginChangeCheck();
+        DrawSourcesAndAnalyzer(meshCombiner);
+        DrawCombineSettings();
         DrawLightmapUvSettings();
-        serializedObject.ApplyModifiedProperties();
+        DrawGeometryCleanupSettings();
+        DrawOutputSettings();
+        bool settingsChanged = EditorGUI.EndChangeCheck();
 
-        EditorGUILayout.Space();
-        DrawCombineAndRecovery(meshCombiner, meshFilter, meshRenderer);
+        if (serializedObject.ApplyModifiedProperties() || settingsChanged)
+            _analysisDirty = true;
 
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Combined Mesh Asset", EditorStyles.boldLabel);
-        serializedObject.Update();
-        EditorGUILayout.PropertyField(
-            _folderPath,
-            new GUIContent("Folder Path", "Path under Assets where the generated Mesh asset will be saved."));
-        serializedObject.ApplyModifiedProperties();
-
-        string folderPath = meshCombiner.FolderPath;
-        bool isValidPath = IsValidPath(folderPath);
-        mesh = meshFilter.sharedMesh;
-        bool meshIsSaved = mesh != null && AssetDatabase.Contains(mesh);
-
-        if (!isValidPath)
-        {
-            EditorGUILayout.HelpBox(
-                "Folder path is invalid. Use a relative path under Assets, for example Generated/CombinedMeshes.",
-                MessageType.Error);
-        }
-
-        using (new EditorGUI.DisabledScope(mesh == null || (!isValidPath && !meshIsSaved)))
-        {
-            string saveMeshButtonText = meshIsSaved ? "Show Saved Combined Mesh" : "Save Combined Mesh";
-            if (GUILayout.Button(saveMeshButtonText))
-            {
-                meshCombiner.FolderPath = SaveCombinedMesh(mesh, folderPath);
-                EditorUtility.SetDirty(meshCombiner);
-            }
-        }
+        DrawActions(meshCombiner, destinationMeshFilter, destinationMeshRenderer);
+        DrawAssetSettings(meshCombiner, destinationMeshFilter);
     }
 
-    private static void DrawCombineAndRecovery(
-        MeshCombiner meshCombiner,
-        MeshFilter destinationMeshFilter,
-        MeshRenderer destinationMeshRenderer)
+    private void DrawSourcesAndAnalyzer(MeshCombiner meshCombiner)
     {
-        bool hasRestoreSnapshot = HasRestoreSnapshot(meshCombiner);
-        bool destructiveMode = meshCombiner.DestroyCombinedChildren;
-
-        using (new EditorGUILayout.HorizontalScope())
+        BeginSection(ref _sourcesExpanded, "Sources & Analyzer", "Controls which child MeshFilters are eligible and shows the exact preflight result before combining.");
+        if (_sourcesExpanded)
         {
-            using (new EditorGUI.DisabledScope(hasRestoreSnapshot))
+            EditorGUILayout.PropertyField(
+                _combineInactiveChildren,
+                new GUIContent(
+                    "Combine Inactive Children",
+                    "When enabled, inactive child GameObjects are eligible for combining. When disabled, MeshFilters outside Unity's active GetComponentsInChildren traversal are ignored and listed by the analyzer."));
+
+            EditorGUILayout.PropertyField(
+                _meshFiltersToSkip,
+                new GUIContent(
+                    "User Ignore List",
+                    "Explicit per-component ignore list. MeshFilters placed here are never combined and appear in the Analyzer under User Ignore."),
+                true);
+
+            EditorGUILayout.Space(3f);
+            using (new EditorGUILayout.HorizontalScope())
             {
-                if (GUILayout.Button("Combine Meshes", GUILayout.Height(28)))
+                if (GUILayout.Button(new GUIContent(
+                        "Analyze / Validate",
+                        "Runs the same source-selection rules used by the combiner and builds a read-only preflight report without changing scene objects."),
+                    GUILayout.Height(26)))
                 {
-                    RestoreSnapshot restoreSnapshot = CaptureRestoreSnapshot(meshCombiner, destinationMeshFilter);
+                    RunAnalysis(meshCombiner, true);
+                }
 
-                    // Persist before mutating the hierarchy. If the Editor crashes during/after Combine,
-                    // this snapshot can still be recovered on the next Editor launch.
-                    if (!destructiveMode)
+                using (new EditorGUI.DisabledScope(_analysisReport == null))
+                {
+                    if (GUILayout.Button(new GUIContent(
+                            "Ping First Error",
+                            "Selects the context object of the first analyzer error, when one is available."),
+                        GUILayout.Width(110), GUILayout.Height(26)))
                     {
-                        SaveRestoreSnapshot(meshCombiner, restoreSnapshot);
-                    }
-                    else
-                    {
-                        ClearRestoreSnapshot(meshCombiner);
-                    }
-
-                    Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Combine Meshes");
-
-                    if (meshCombiner.TryCombineMeshes(true))
-                    {
-                        EditorUtility.SetDirty(meshCombiner);
-                        EditorUtility.SetDirty(destinationMeshFilter);
-                        EditorUtility.SetDirty(destinationMeshRenderer);
-                    }
-                    else
-                    {
-                        ClearRestoreSnapshot(meshCombiner);
+                        PingFirstAnalysisError();
                     }
                 }
             }
 
-            using (new EditorGUI.DisabledScope(!hasRestoreSnapshot || destructiveMode))
+            if (_analysisDirty)
             {
-                if (GUILayout.Button("Restore Exact State", GUILayout.Height(28)))
-                {
-                    if (TryGetRestoreSnapshot(meshCombiner, out RestoreSnapshot restoreSnapshot))
-                    {
-                        Mesh generatedMesh = destinationMeshFilter.sharedMesh;
-                        Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Restore Mesh Combine Sources");
-                        RestoreExactState(meshCombiner, destinationMeshFilter, destinationMeshRenderer, restoreSnapshot);
-                        ClearRestoreSnapshot(meshCombiner);
-                        DestroyTransientCombinedMesh(generatedMesh);
-
-                        EditorUtility.SetDirty(meshCombiner);
-                        EditorUtility.SetDirty(destinationMeshFilter);
-                        EditorUtility.SetDirty(destinationMeshRenderer);
-                    }
-                }
+                EditorGUILayout.HelpBox(
+                    "Analyzer result is stale because settings or hierarchy state changed. Run Analyze / Validate again. Combine Meshes always reruns validation automatically before modifying the hierarchy.",
+                    MessageType.Warning);
             }
+
+            DrawAnalysisReport();
         }
+        EndSection();
+    }
 
-        using (new EditorGUI.DisabledScope(destructiveMode))
+    private void DrawCombineSettings()
+    {
+        BeginSection(ref _combineExpanded, "Combine", "Core mesh/material output behavior.");
+        if (_combineExpanded)
         {
-            if (GUILayout.Button("Force Recover Sources (No Snapshot)", GUILayout.Height(24)))
-            {
-                Mesh generatedMesh = destinationMeshFilter.sharedMesh;
-                Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Force Recover Mesh Combine Sources");
-                ForceRecoverWithoutSnapshot(meshCombiner, destinationMeshFilter, destinationMeshRenderer);
-                ClearRestoreSnapshot(meshCombiner);
-                DestroyTransientCombinedMesh(generatedMesh);
+            EditorGUILayout.PropertyField(
+                _createMultiMaterialMesh,
+                new GUIContent(
+                    "Create Multi-Material Mesh",
+                    "Enable to preserve different source Material references as separate output submeshes. Disable only when every included source submesh uses the same Material reference."));
 
-                EditorUtility.SetDirty(meshCombiner);
-                EditorUtility.SetDirty(destinationMeshFilter);
-                EditorUtility.SetDirty(destinationMeshRenderer);
-            }
-        }
-
-        if (hasRestoreSnapshot)
-        {
             EditorGUILayout.HelpBox(
-                "A crash-persistent exact restore snapshot exists. It is stored with stable GlobalObjectId references and survives domain reloads and Editor restarts. Restore Exact State returns source GameObjects and MeshRenderers to the active/enabled state captured before Combine.",
+                _createMultiMaterialMesh.boolValue
+                    ? "Different shared Material references are grouped into separate output submeshes. This reduces renderer count, but each material/submesh can still require its own draw submission."
+                    : "Single Material mode validates that all included source submeshes use the same Material reference before Combine.",
                 MessageType.Info);
         }
-        else if (destinationMeshFilter.sharedMesh != null)
-        {
-            EditorGUILayout.HelpBox(
-                "No exact snapshot is available. Force Recover Sources clears the combined output and enables all descendant MeshFilter GameObjects and MeshRenderers. This is intentionally aggressive and can re-enable helpers/variants that were disabled before Combine.",
-                MessageType.Warning);
-        }
-        else
-        {
-            EditorGUILayout.HelpBox(
-                "Force Recover Sources is an emergency fallback and does not require an exact snapshot. It is useful after an Editor crash or stale scene state, but it intentionally enables all descendant mesh sources.",
-                MessageType.None);
-        }
+        EndSection();
     }
 
     private void DrawLightmapUvSettings()
     {
-        EditorGUILayout.LabelField("Lightmap UV", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(
-            _lightmapUvMode,
-            new GUIContent("Lightmap UV Mode", "Controls what happens to Mesh.uv2, which baked lightmaps use."));
-
-        LightmapUvMode mode = (LightmapUvMode)_lightmapUvMode.enumValueIndex;
-        switch (mode)
+        BeginSection(ref _lightmapExpanded, "Lightmap UV2", "Controls what happens to Mesh.uv2 on the generated mesh.");
+        if (_lightmapExpanded)
         {
-            case LightmapUvMode.None:
-                EditorGUILayout.HelpBox(
-                    "No lightmap UV processing. Use this for non-lightmapped output or when UV2 will be handled elsewhere.",
-                    MessageType.Info);
-                break;
+            LightmapUvMode currentMode = (LightmapUvMode)_lightmapUvMode.enumValueIndex;
+            LightmapUvMode newMode = (LightmapUvMode)EditorGUILayout.EnumPopup(
+                new GUIContent(
+                    "Lightmap UV Mode",
+                    "Select the UV2 strategy used by baked lightmaps. Settings that do not apply to the selected mode are hidden."),
+                currentMode);
+            if (newMode != currentMode)
+                _lightmapUvMode.enumValueIndex = (int)newMode;
 
-            case LightmapUvMode.PreserveSourceUv2:
-                EditorGUILayout.HelpBox(
-                    "Keeps source UV2 exactly as-is. Repeated modular meshes usually overlap after combine, so this mode is mainly diagnostic unless the sources were already packed into one shared UV space.",
-                    MessageType.Warning);
-                break;
+            LightmapUvMode mode = (LightmapUvMode)_lightmapUvMode.enumValueIndex;
+            bool showPackingSettings =
+                mode == LightmapUvMode.PreserveAndRepackSourceUv2 ||
+                mode == LightmapUvMode.CoplanarStitchedUv2;
 
-            case LightmapUvMode.PreserveAndRepackSourceUv2:
+            if (showPackingSettings)
+            {
                 EditorGUILayout.IntSlider(
                     _repackPaddingTexels,
                     1,
                     16,
                     new GUIContent(
                         "Chart Padding (texels)",
-                        "Padding reserved around every existing UV2 chart before packing. Increase this if UV Overlap shows red chart neighborhoods."));
+                        "Padding reserved around UV2 charts during packing. Higher values reduce cross-chart filtering risk but consume more atlas space."));
 
-                int[] resolutions = { 256, 512, 1024, 2048, 4096 };
-                GUIContent[] resolutionOptions =
+                DrawReferenceResolutionPopup();
+            }
+
+            switch (mode)
+            {
+                case LightmapUvMode.None:
+                    EditorGUILayout.HelpBox(
+                        "No UV2 processing. Use this when the output is not baked or another tool will build lightmap UVs later.",
+                        MessageType.Info);
+                    break;
+
+                case LightmapUvMode.PreserveSourceUv2:
+                    EditorGUILayout.HelpBox(
+                        "Copies source UV2 as-is. Reused modular meshes commonly overlap in the same 0..1 UV space, so this is mainly useful when the sources were already authored into one shared non-overlapping atlas.",
+                        MessageType.Warning);
+                    break;
+
+                case LightmapUvMode.PreserveAndRepackSourceUv2:
+                    EditorGUILayout.HelpBox(
+                        "Keeps existing source UV2 chart topology and repacks the charts by world-space surface density. No new UV seams are created, but disconnected modular charts stay disconnected and can still bake with visible joins.",
+                        MessageType.Info);
+                    break;
+
+                case LightmapUvMode.RegenerateUv2:
+                    EditorGUILayout.HelpBox(
+                        "Rebuilds UV2 for the entire combined mesh using Unity's secondary UV unwrapper. Source UV2 is not required. Unity may split vertices while creating chart seams.",
+                        MessageType.Warning);
+                    break;
+
+                case LightmapUvMode.CoplanarStitchedUv2:
+                    EditorGUILayout.HelpBox(
+                        "Recommended for modular static architecture. The combiner joins exact and partial/T-junction coplanar boundaries into continuous UV2 charts using validated defaults (0.0001 position tolerance, 1 degree coplanar angle). Geometry, UV0, normals, tangents and materials are not changed.",
+                        MessageType.Info);
+                    EditorGUILayout.LabelField(
+                        new GUIContent(
+                            "Advanced tuning",
+                            "Use the separate advanced tool only when a specific asset needs non-default edge tolerance or coplanar angle values."),
+                        "Tools > Mesh Combiner > Coplanar Stitched UV2...");
+                    break;
+            }
+        }
+        EndSection();
+    }
+
+    private void DrawReferenceResolutionPopup()
+    {
+        int[] resolutions = { 256, 512, 1024, 2048, 4096 };
+        string[] labels = { "256", "512", "1024", "2048", "4096" };
+        int current = _repackPaddingReferenceResolution.intValue;
+        if (!resolutions.Contains(current)) current = 512;
+
+        int selected = Array.IndexOf(resolutions, current);
+        selected = EditorGUILayout.Popup(
+            new GUIContent(
+                "Padding Reference Size",
+                "Reference lightmap resolution used to convert Chart Padding from texels into normalized UV space."),
+            selected,
+            labels);
+        _repackPaddingReferenceResolution.intValue = resolutions[Mathf.Clamp(selected, 0, resolutions.Length - 1)];
+    }
+
+    private void DrawGeometryCleanupSettings()
+    {
+        BeginSection(ref _geometryExpanded, "Geometry Cleanup", "Optional conservative removal of exact back-to-back internal faces.");
+        if (_geometryExpanded)
+        {
+            EditorGUILayout.PropertyField(
+                _removeExactOpposingFaces,
+                new GUIContent(
+                    "Remove Exact Opposing Faces",
+                    "Removes pairs of coincident triangles that use the same three positions but opposite winding. This is conservative exact matching, not a Boolean union."));
+
+            if (_removeExactOpposingFaces.boolValue)
+            {
+                EditorGUILayout.PropertyField(
+                    _exactFacePositionTolerance,
+                    new GUIContent(
+                        "Position Tolerance",
+                        "Destination-local position tolerance used when matching exact opposing triangle vertices. 0.0001 equals 0.1 mm when one Unity unit is one meter."));
+                if (_exactFacePositionTolerance.floatValue < 0.000001f)
+                    _exactFacePositionTolerance.floatValue = 0.000001f;
+
+                EditorGUILayout.HelpBox(
+                    "Only exact coincident opposite-wound triangle pairs are removed. Partially overlapping polygons, different triangulations and general Boolean cleanup are intentionally not handled here.",
+                    MessageType.Warning);
+            }
+        }
+        EndSection();
+    }
+
+    private void DrawOutputSettings()
+    {
+        BeginSection(ref _outputExpanded, "Output", "Controls what happens to source objects after a successful combine and whether a destination MeshCollider is generated.");
+        if (_outputExpanded)
+        {
+            EditorGUILayout.PropertyField(
+                _deactivateCombinedChildren,
+                new GUIContent(
+                    "Deactivate Combined Children",
+                    "After a successful combine, disables the included source GameObjects. This is the safest normal workflow because exact recovery can restore their previous active state."));
+
+            if (!_deactivateCombinedChildren.boolValue)
+            {
+                EditorGUILayout.PropertyField(
+                    _deactivateCombinedChildrenMeshRenderers,
+                    new GUIContent(
+                        "Disable Child MeshRenderers",
+                        "Keeps source GameObjects active but disables their MeshRenderer components. Existing child Colliders and scripts remain active."));
+            }
+
+            EditorGUILayout.PropertyField(
+                _updateOrCreateMeshCollider,
+                new GUIContent(
+                    "Update/Create MeshCollider",
+                    "Creates or updates a MeshCollider on the combiner root and assigns the final combined render mesh. Primitive/custom child Colliders are not merged or removed."));
+
+            if (_updateOrCreateMeshCollider.boolValue &&
+                !_deactivateCombinedChildren.boolValue &&
+                _deactivateCombinedChildrenMeshRenderers.boolValue)
+            {
+                EditorGUILayout.HelpBox(
+                    "Child GameObjects remain active, so their existing Colliders also remain active. A generated combined MeshCollider can therefore duplicate collision unless you manage child Colliders separately.",
+                    MessageType.Warning);
+            }
+
+            _destructiveExpanded = EditorGUILayout.Foldout(
+                _destructiveExpanded,
+                new GUIContent(
+                    "Destructive source handling",
+                    "Advanced option for permanently deleting included source GameObjects after combining."),
+                true);
+
+            if (_destructiveExpanded)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.PropertyField(
+                    _destroyCombinedChildren,
+                    new GUIContent(
+                        "Destroy Combined Children",
+                        "Permanently destroys included source GameObjects after combine. Exact Restore and Force Recover cannot reconstruct destroyed hierarchy objects."));
+                EditorGUI.indentLevel--;
+
+                if (_destroyCombinedChildren.boolValue)
                 {
-                    new GUIContent("256"),
-                    new GUIContent("512"),
-                    new GUIContent("1024"),
-                    new GUIContent("2048"),
-                    new GUIContent("4096")
-                };
-                int currentResolution = _repackPaddingReferenceResolution.intValue;
-                if (!resolutions.Contains(currentResolution))
+                    _deactivateCombinedChildren.boolValue = false;
+                    _deactivateCombinedChildrenMeshRenderers.boolValue = false;
+                    EditorGUILayout.HelpBox(
+                        "Destructive mode is enabled. Recovery snapshots cannot recreate deleted source objects. Use this only when the generated output is already verified and saved.",
+                        MessageType.Error);
+                }
+            }
+        }
+        EndSection();
+    }
+
+    private void DrawActions(
+        MeshCombiner meshCombiner,
+        MeshFilter destinationMeshFilter,
+        MeshRenderer destinationMeshRenderer)
+    {
+        BeginSection(ref _actionsExpanded, "Actions & Recovery", "Combine, restore and emergency recovery operations.");
+        if (_actionsExpanded)
+        {
+            bool hasRestoreSnapshot = HasRestoreSnapshot(meshCombiner);
+            bool destructiveMode = meshCombiner.DestroyCombinedChildren;
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                using (new EditorGUI.DisabledScope(hasRestoreSnapshot))
                 {
-                    currentResolution = 512;
+                    if (GUILayout.Button(new GUIContent(
+                            "Combine Meshes",
+                            "Runs Analyze / Validate first. If there are no blocking analyzer errors, combines the eligible source set and stores a crash-persistent restore snapshot unless destructive mode is enabled."),
+                        GUILayout.Height(30)))
+                    {
+                        TryAnalyzeAndCombine(meshCombiner, destinationMeshFilter, destinationMeshRenderer);
+                    }
                 }
 
-                _repackPaddingReferenceResolution.intValue = EditorGUILayout.IntPopup(
-                    new GUIContent(
-                        "Padding Reference Size",
-                        "Chart Padding is converted to normalized UV space using this resolution."),
-                    currentResolution,
-                    resolutionOptions,
-                    resolutions);
+                using (new EditorGUI.DisabledScope(!hasRestoreSnapshot || destructiveMode))
+                {
+                    if (GUILayout.Button(new GUIContent(
+                            "Restore Exact State",
+                            "Restores the exact pre-combine GameObject active states and MeshRenderer enabled states recorded in the crash-persistent snapshot."),
+                        GUILayout.Height(30)))
+                    {
+                        if (TryGetRestoreSnapshot(meshCombiner, out RestoreSnapshot restoreSnapshot))
+                        {
+                            Mesh generatedMesh = destinationMeshFilter.sharedMesh;
+                            Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Restore Mesh Combine Sources");
+                            RestoreExactState(meshCombiner, destinationMeshFilter, destinationMeshRenderer, restoreSnapshot);
+                            ClearRestoreSnapshot(meshCombiner);
+                            DestroyTransientCombinedMesh(generatedMesh);
 
+                            EditorUtility.SetDirty(meshCombiner);
+                            EditorUtility.SetDirty(destinationMeshFilter);
+                            EditorUtility.SetDirty(destinationMeshRenderer);
+                            _analysisDirty = true;
+                        }
+                    }
+                }
+            }
+
+            using (new EditorGUI.DisabledScope(destructiveMode))
+            {
+                if (GUILayout.Button(new GUIContent(
+                        "Force Recover Sources (No Snapshot)",
+                        "Emergency fallback. Clears combined output and aggressively re-enables descendant source GameObjects and MeshRenderers even when no valid restore snapshot exists."),
+                    GUILayout.Height(24)))
+                {
+                    Mesh generatedMesh = destinationMeshFilter.sharedMesh;
+                    Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Force Recover Mesh Combine Sources");
+                    ForceRecoverWithoutSnapshot(meshCombiner, destinationMeshFilter, destinationMeshRenderer);
+                    ClearRestoreSnapshot(meshCombiner);
+                    DestroyTransientCombinedMesh(generatedMesh);
+
+                    EditorUtility.SetDirty(meshCombiner);
+                    EditorUtility.SetDirty(destinationMeshFilter);
+                    EditorUtility.SetDirty(destinationMeshRenderer);
+                    _analysisDirty = true;
+                }
+            }
+
+            if (hasRestoreSnapshot)
+            {
                 EditorGUILayout.HelpBox(
-                    "Recommended experimental mode for modular static geometry with valid source UV2. Charts are packed by world-space surface density. Existing chart topology is preserved and no new vertices are created. Independent charts can have different checker phase/offset in Baked Lightmap visualization; equal checker size (texel density) is the important part.",
+                    "Crash-persistent exact restore snapshot is available. It uses GlobalObjectId references and survives domain reloads and Editor restarts while the source scene objects still exist.",
                     MessageType.Info);
-                break;
-
-            case LightmapUvMode.RegenerateUv2:
+            }
+            else if (destinationMeshFilter.sharedMesh != null)
+            {
                 EditorGUILayout.HelpBox(
-                    "Rebuilds UV2 for the entire combined mesh with Unity's secondary UV unwrapper. This can split vertices and change baked seams. UInt16 is kept when the index-count upper bound proves the result cannot exceed 65,535 vertices.",
+                    "Combined output exists but no exact restore snapshot is available. Force Recover is intentionally aggressive and can re-enable helpers/variants that were disabled before Combine.",
                     MessageType.Warning);
-                break;
+            }
         }
+        EndSection();
+    }
+
+    private void TryAnalyzeAndCombine(
+        MeshCombiner meshCombiner,
+        MeshFilter destinationMeshFilter,
+        MeshRenderer destinationMeshRenderer)
+    {
+        serializedObject.ApplyModifiedProperties();
+        RunAnalysis(meshCombiner, true);
+
+        if (_analysisReport != null && _analysisReport.HasErrors)
+        {
+            int errorCount = _analysisReport.Issues.Count(issue => issue.Severity == MeshCombinerIssueSeverity.Error);
+            Debug.LogError(
+                "Mesh Combiner: analyzer blocked Combine for \"" + meshCombiner.name + "\" because " +
+                errorCount + " blocking error(s) were found. Review Sources & Analyzer in the Inspector.",
+                meshCombiner);
+            return;
+        }
+
+        bool destructiveMode = meshCombiner.DestroyCombinedChildren;
+        RestoreSnapshot restoreSnapshot = CaptureRestoreSnapshot(meshCombiner, destinationMeshFilter);
+
+        if (!destructiveMode)
+            SaveRestoreSnapshot(meshCombiner, restoreSnapshot);
+        else
+            ClearRestoreSnapshot(meshCombiner);
+
+        Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Combine Meshes");
+
+        if (meshCombiner.TryCombineMeshes(true))
+        {
+            EditorUtility.SetDirty(meshCombiner);
+            EditorUtility.SetDirty(destinationMeshFilter);
+            EditorUtility.SetDirty(destinationMeshRenderer);
+            _analysisDirty = true;
+        }
+        else
+        {
+            ClearRestoreSnapshot(meshCombiner);
+        }
+    }
+
+    private void DrawAssetSettings(MeshCombiner meshCombiner, MeshFilter destinationMeshFilter)
+    {
+        BeginSection(ref _assetExpanded, "Combined Mesh Asset", "Optional persistence of the generated transient Mesh as an Asset under Assets/.");
+        if (_assetExpanded)
+        {
+            serializedObject.Update();
+            EditorGUILayout.PropertyField(
+                _folderPath,
+                new GUIContent(
+                    "Folder Path",
+                    "Relative folder under Assets where Save Combined Mesh creates the generated .asset file. Do not include the Assets/ prefix."));
+            serializedObject.ApplyModifiedProperties();
+
+            string folderPath = meshCombiner.FolderPath;
+            bool isValidPath = IsValidPath(folderPath);
+            Mesh mesh = destinationMeshFilter.sharedMesh;
+            bool meshIsSaved = mesh != null && AssetDatabase.Contains(mesh);
+
+            if (!isValidPath)
+            {
+                EditorGUILayout.HelpBox(
+                    "Folder path is invalid. Use a relative path under Assets, for example Generated/CombinedMeshes.",
+                    MessageType.Error);
+            }
+
+            using (new EditorGUI.DisabledScope(mesh == null || (!isValidPath && !meshIsSaved)))
+            {
+                string buttonText = meshIsSaved ? "Show Saved Combined Mesh" : "Save Combined Mesh";
+                if (GUILayout.Button(new GUIContent(
+                        buttonText,
+                        meshIsSaved
+                            ? "Pings the already saved Mesh asset in the Project window."
+                            : "Creates a persistent .asset for the currently generated combined Mesh.")))
+                {
+                    meshCombiner.FolderPath = SaveCombinedMesh(mesh, folderPath);
+                    EditorUtility.SetDirty(meshCombiner);
+                }
+            }
+        }
+        EndSection();
+    }
+
+    private void RunAnalysis(MeshCombiner meshCombiner, bool logSummary)
+    {
+        _analysisReport = MeshCombinerAnalyzer.Analyze(
+            meshCombiner,
+            GetUserIgnoredMeshFilters(),
+            _combineInactiveChildren.boolValue,
+            _createMultiMaterialMesh.boolValue,
+            (LightmapUvMode)_lightmapUvMode.enumValueIndex);
+        _analysisDirty = false;
+
+        if (!logSummary || _analysisReport == null)
+            return;
+
+        int errorCount = _analysisReport.Issues.Count(issue => issue.Severity == MeshCombinerIssueSeverity.Error);
+        int warningCount = _analysisReport.Issues.Count(issue => issue.Severity == MeshCombinerIssueSeverity.Warning);
+        Debug.Log(
+            "Mesh Combiner Analyzer: \"" + meshCombiner.name + "\" -> " +
+            _analysisReport.Included.Count + " included, " + _analysisReport.Ignored.Count + " ignored, " +
+            errorCount + " errors, " + warningCount + " warnings. Estimated output: " +
+            _analysisReport.OutputSubmeshEstimate + " submesh/material draws, " +
+            _analysisReport.ExpectedIndexFormat + ".",
+            meshCombiner);
+    }
+
+    private IReadOnlyCollection<MeshFilter> GetUserIgnoredMeshFilters()
+    {
+        List<MeshFilter> result = new List<MeshFilter>();
+        if (_meshFiltersToSkip == null || !_meshFiltersToSkip.isArray)
+            return result;
+
+        for (int i = 0; i < _meshFiltersToSkip.arraySize; i++)
+        {
+            MeshFilter meshFilter = _meshFiltersToSkip.GetArrayElementAtIndex(i).objectReferenceValue as MeshFilter;
+            if (meshFilter != null)
+                result.Add(meshFilter);
+        }
+
+        return result;
+    }
+
+    private void DrawAnalysisReport()
+    {
+        if (_analysisReport == null)
+        {
+            EditorGUILayout.HelpBox("No analyzer report is available yet.", MessageType.None);
+            return;
+        }
+
+        EditorGUILayout.Space(4f);
+        using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+        {
+            EditorGUILayout.LabelField("Preflight Summary", EditorStyles.boldLabel);
+            DrawMetric("Discovered MeshFilters", _analysisReport.TotalDiscoveredMeshFilters.ToString("N0"));
+            DrawMetric("Included / Ignored", _analysisReport.Included.Count.ToString("N0") + " / " + _analysisReport.Ignored.Count.ToString("N0"));
+            DrawMetric("Renderers", _analysisReport.SourceRendererCount.ToString("N0") + " -> " + (_analysisReport.Included.Count > 0 ? "1" : "0"));
+            DrawMetric("Submesh/material draws (estimate)", _analysisReport.SourceSubmeshCount.ToString("N0") + " -> " + _analysisReport.OutputSubmeshEstimate.ToString("N0"));
+            DrawMetric("Unique materials", _analysisReport.UniqueMaterialCount.ToString("N0"));
+            DrawMetric("Source vertices", _analysisReport.SourceVertexCount.ToString("N0"));
+            DrawMetric("Source triangles", _analysisReport.SourceTriangleCount.ToString("N0"));
+            DrawMetric("Expected index format", _analysisReport.ExpectedIndexFormat.ToString());
+        }
+
+        _issuesExpanded = EditorGUILayout.Foldout(
+            _issuesExpanded,
+            "Issues & Notes (" + _analysisReport.Issues.Count + ")",
+            true);
+        if (_issuesExpanded)
+        {
+            foreach (MeshCombinerAnalysisIssue issue in _analysisReport.Issues)
+            {
+                MessageType messageType = MessageType.None;
+                switch (issue.Severity)
+                {
+                    case MeshCombinerIssueSeverity.Info:
+                        messageType = MessageType.Info;
+                        break;
+                    case MeshCombinerIssueSeverity.Warning:
+                        messageType = MessageType.Warning;
+                        break;
+                    case MeshCombinerIssueSeverity.Error:
+                        messageType = MessageType.Error;
+                        break;
+                }
+
+                EditorGUILayout.HelpBox(issue.Message, messageType);
+                if (issue.Context != null)
+                {
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        EditorGUILayout.ObjectField("Context", issue.Context, issue.Context.GetType(), true);
+                        if (GUILayout.Button("Ping", GUILayout.Width(48)))
+                            EditorGUIUtility.PingObject(issue.Context);
+                    }
+                }
+            }
+        }
+
+        _ignoredListExpanded = EditorGUILayout.Foldout(
+            _ignoredListExpanded,
+            "Ignored Sources (" + _analysisReport.Ignored.Count + ")",
+            true);
+        if (_ignoredListExpanded)
+            DrawIgnoredSources();
+
+        _includedListExpanded = EditorGUILayout.Foldout(
+            _includedListExpanded,
+            "Included Sources (" + _analysisReport.Included.Count + ")",
+            true);
+        if (_includedListExpanded)
+        {
+            foreach (MeshFilter meshFilter in _analysisReport.Included)
+            {
+                if (meshFilter == null) continue;
+                EditorGUILayout.ObjectField(meshFilter, typeof(MeshFilter), true);
+            }
+        }
+    }
+
+    private void DrawIgnoredSources()
+    {
+        foreach (MeshCombinerIgnoreReason reason in Enum.GetValues(typeof(MeshCombinerIgnoreReason)))
+        {
+            List<MeshCombinerAnalysisEntry> entries = _analysisReport.Ignored
+                .Where(entry => entry.Reason == reason)
+                .ToList();
+            if (entries.Count == 0)
+                continue;
+
+            EditorGUILayout.Space(2f);
+            EditorGUILayout.LabelField(GetIgnoreReasonLabel(reason) + " (" + entries.Count + ")", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+            foreach (MeshCombinerAnalysisEntry entry in entries)
+            {
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                {
+                    if (entry.MeshFilter != null)
+                        EditorGUILayout.ObjectField(entry.MeshFilter, typeof(MeshFilter), true);
+                    EditorGUILayout.LabelField(entry.Details, EditorStyles.wordWrappedMiniLabel);
+                }
+            }
+            EditorGUI.indentLevel--;
+        }
+    }
+
+    private static string GetIgnoreReasonLabel(MeshCombinerIgnoreReason reason)
+    {
+        switch (reason)
+        {
+            case MeshCombinerIgnoreReason.UserIgnore:
+                return "User Ignore";
+            case MeshCombinerIgnoreReason.InactiveHierarchy:
+                return "Inactive Hierarchy";
+            case MeshCombinerIgnoreReason.MissingMesh:
+                return "Missing Mesh";
+            case MeshCombinerIgnoreReason.MissingMeshRenderer:
+                return "Missing MeshRenderer";
+            case MeshCombinerIgnoreReason.DisabledMeshRenderer:
+                return "Disabled MeshRenderer";
+            case MeshCombinerIgnoreReason.NestedExactDuplicate:
+                return "Nested Exact Duplicate";
+            default:
+                return reason.ToString();
+        }
+    }
+
+    private static void DrawMetric(string label, string value)
+    {
+        using (new EditorGUILayout.HorizontalScope())
+        {
+            EditorGUILayout.LabelField(label, GUILayout.MinWidth(180));
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.LabelField(value, EditorStyles.boldLabel, GUILayout.MaxWidth(150));
+        }
+    }
+
+    private void PingFirstAnalysisError()
+    {
+        if (_analysisReport == null)
+            return;
+
+        MeshCombinerAnalysisIssue issue = _analysisReport.Issues
+            .FirstOrDefault(item => item.Severity == MeshCombinerIssueSeverity.Error && item.Context != null);
+        if (issue != null)
+        {
+            Selection.activeObject = issue.Context;
+            EditorGUIUtility.PingObject(issue.Context);
+        }
+    }
+
+    private static void BeginSection(ref bool expanded, string title, string tooltip)
+    {
+        EditorGUILayout.Space(3f);
+        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+        expanded = EditorGUILayout.Foldout(expanded, new GUIContent(title, tooltip), true, EditorStyles.foldoutHeader);
+    }
+
+    private static void EndSection()
+    {
+        EditorGUILayout.EndVertical();
     }
 
     private static RestoreSnapshot CaptureRestoreSnapshot(
@@ -368,9 +748,7 @@ public class MeshCombinerEditor : Editor
         foreach (MeshFilter sourceMeshFilter in sourceMeshFilters)
         {
             if (sourceMeshFilter == null || sourceMeshFilter == destinationMeshFilter)
-            {
                 continue;
-            }
 
             GameObject sourceGameObject = sourceMeshFilter.gameObject;
             int gameObjectId = sourceGameObject.GetInstanceID();
@@ -386,9 +764,7 @@ public class MeshCombinerEditor : Editor
 
             MeshRenderer sourceRenderer = sourceMeshFilter.GetComponent<MeshRenderer>();
             if (sourceRenderer == null)
-            {
                 continue;
-            }
 
             int rendererId = sourceRenderer.GetInstanceID();
             if (capturedRenderers.Add(rendererId))
@@ -471,9 +847,7 @@ public class MeshCombinerEditor : Editor
         foreach (MeshFilter sourceMeshFilter in sourceMeshFilters)
         {
             if (sourceMeshFilter == null || sourceMeshFilter == destinationMeshFilter)
-            {
                 continue;
-            }
 
             GameObject sourceGameObject = sourceMeshFilter.gameObject;
             if (!sourceGameObject.activeSelf)
@@ -507,27 +881,20 @@ public class MeshCombinerEditor : Editor
         destinationMeshRenderer.sharedMaterials = Array.Empty<Material>();
 
         MeshCollider meshCollider = meshCombiner.GetComponent<MeshCollider>();
-        if (meshCollider != null &&
-            (combinedMesh == null || meshCollider.sharedMesh == combinedMesh))
-        {
+        if (meshCollider != null && (combinedMesh == null || meshCollider.sharedMesh == combinedMesh))
             meshCollider.sharedMesh = null;
-        }
     }
 
     private static void DestroyTransientCombinedMesh(Mesh generatedMesh)
     {
         if (generatedMesh != null && !AssetDatabase.Contains(generatedMesh))
-        {
             Undo.DestroyObjectImmediate(generatedMesh);
-        }
     }
 
     private static string GetStableObjectId(UnityEngine.Object target)
     {
         if (target == null)
-        {
             return string.Empty;
-        }
 
         GlobalObjectId id = GlobalObjectId.GetGlobalObjectIdSlow(target);
         return id.Equals(default(GlobalObjectId)) ? string.Empty : id.ToString();
@@ -537,9 +904,7 @@ public class MeshCombinerEditor : Editor
     {
         T currentSessionObject = EditorUtility.InstanceIDToObject(instanceId) as T;
         if (currentSessionObject != null)
-        {
             return currentSessionObject;
-        }
 
         if (string.IsNullOrEmpty(globalObjectId) ||
             !GlobalObjectId.TryParse(globalObjectId, out GlobalObjectId parsedId))
@@ -555,9 +920,7 @@ public class MeshCombinerEditor : Editor
         string projectKey = Hash128.Compute(Application.dataPath).ToString();
         string objectKey = GetStableObjectId(meshCombiner);
         if (string.IsNullOrEmpty(objectKey))
-        {
             objectKey = "instance-" + meshCombiner.GetInstanceID();
-        }
 
         return RestoreStateKeyPrefix + projectKey + "." + objectKey;
     }
@@ -593,15 +956,11 @@ public class MeshCombinerEditor : Editor
     private static bool IsValidPath(string folderPath)
     {
         if (string.IsNullOrWhiteSpace(folderPath))
-        {
             return false;
-        }
 
         string normalized = folderPath.Replace('\\', '/').Trim('/');
         if (string.IsNullOrWhiteSpace(normalized) || normalized.StartsWith("Assets/"))
-        {
             return false;
-        }
 
         const string pattern = "[:*?\"<>|]";
         return !Regex.IsMatch(normalized, pattern);
@@ -610,9 +969,7 @@ public class MeshCombinerEditor : Editor
     private static string SaveCombinedMesh(Mesh mesh, string folderPath)
     {
         if (mesh == null)
-        {
             return folderPath;
-        }
 
         if (AssetDatabase.Contains(mesh))
         {
@@ -633,9 +990,7 @@ public class MeshCombinerEditor : Editor
 
         string directory = System.IO.Path.GetDirectoryName(meshPath);
         if (string.IsNullOrEmpty(directory))
-        {
             return folderPath;
-        }
 
         directory = directory.Replace('\\', '/');
         return directory.StartsWith("Assets/")
@@ -651,9 +1006,7 @@ public class MeshCombinerEditor : Editor
             string folderName = rawFolderName.Trim();
             string nextPath = currentPath + "/" + folderName;
             if (!AssetDatabase.IsValidFolder(nextPath))
-            {
                 AssetDatabase.CreateFolder(currentPath, folderName);
-            }
 
             currentPath = nextPath;
         }
