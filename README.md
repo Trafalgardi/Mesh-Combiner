@@ -43,23 +43,16 @@ Current version: **2.2.1**
 
 Version 2.2.1 automatically skips a nested child MeshFilter when an ancestor below the MeshCombiner root references the exact same shared Mesh and both objects have effectively the same world transform.
 
-The deeper object is treated as a duplicate helper/proxy. This is generic and does not depend on names such as `HF_WallBakeProxy`.
-
-The Console reports how many duplicates were skipped.
+The deeper object is treated as a duplicate helper/proxy. This does not depend on names such as `HF_WallBakeProxy`.
 
 ## Lightmap UV Mode
 
-### None
+- `None`
+- `Preserve Source UV2`
+- `Preserve And Repack Source UV2`
+- `Regenerate UV2`
 
-No lightmap UV processing.
-
-### Preserve Source UV2
-
-Keeps source `Mesh.uv2` unchanged. Mainly diagnostic because repeated modules often overlap after combine.
-
-### Preserve And Repack Source UV2
-
-Experimental mode for modular static geometry with authored UV2. It preserves authored chart topology, derives relative chart scale from world-space surface area/source UV area, includes source `Scale In Lightmap` in Edit Mode, and packs charts into one non-overlapping atlas without calling `GenerateSecondaryUVSet`.
+`Preserve And Repack Source UV2` preserves authored chart topology, derives relative chart scale from world-space surface area/source UV area, includes source `Scale In Lightmap` in Edit Mode, and repacks charts into one non-overlapping UV2 atlas.
 
 Defaults:
 
@@ -68,23 +61,13 @@ Chart Padding = 2 texels
 Padding Reference Size = 512
 ```
 
-### Regenerate UV2
+## Restore / Undo Combine
 
-Runs Unity's `Unwrapping.GenerateSecondaryUVSet` on the final mesh. It can split vertices and create different chart boundaries.
+The custom Inspector captures exact source `activeSelf` and `MeshRenderer.enabled` state before combine and restores it afterward.
 
-## Recommended baked-light workflow
+## Current topology limitation
 
-1. Add `MeshFilter`, `MeshRenderer`, and `MeshCombiner` to the root.
-2. Start with **Preserve And Repack Source UV2**.
-3. Combine.
-4. Check source count and skipped duplicate count in Console.
-5. Inspect **UV Overlap** and **Texel Validity**.
-6. Bake.
-7. Use **Restore / Undo Combine** before another comparison.
-
-## Current limitations
-
-`Mesh.CombineMeshes` is not a topology union. This fork still does not weld coincident boundary vertices or remove internal faces. If duplicate filtering is clean but **Texel Validity** remains red exactly on modular boundaries, the next planned step is topology-aware welding/unwrap rather than further UV packing tweaks.
+`Mesh.CombineMeshes` does not weld modular boundaries. If duplicate filtering is clean but **Texel Validity** remains invalid exactly along joins, the next step is topology-aware welding/lightmap unwrap rather than further UV packing changes.
 
 ## License
 
