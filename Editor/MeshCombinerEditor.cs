@@ -37,8 +37,9 @@ public class MeshCombinerEditor : Editor
     private SerializedProperty _deactivateCombinedChildren;
     private SerializedProperty _deactivateCombinedChildrenMeshRenderers;
     private SerializedProperty _updateOrCreateMeshCollider;
-    private SerializedProperty _generateUVMap;
     private SerializedProperty _destroyCombinedChildren;
+    private SerializedProperty _lightmapUvMode;
+    private SerializedProperty _repackUvPadding;
     private SerializedProperty _folderPath;
 
     private void OnEnable()
@@ -49,8 +50,9 @@ public class MeshCombinerEditor : Editor
         _deactivateCombinedChildren = serializedObject.FindProperty("deactivateCombinedChildren");
         _deactivateCombinedChildrenMeshRenderers = serializedObject.FindProperty("deactivateCombinedChildrenMeshRenderers");
         _updateOrCreateMeshCollider = serializedObject.FindProperty("updateOrCreateMeshCollider");
-        _generateUVMap = serializedObject.FindProperty("generateUVMap");
         _destroyCombinedChildren = serializedObject.FindProperty("destroyCombinedChildren");
+        _lightmapUvMode = serializedObject.FindProperty("lightmapUvMode");
+        _repackUvPadding = serializedObject.FindProperty("repackUvPadding");
         _folderPath = serializedObject.FindProperty("folderPath");
     }
 
@@ -80,32 +82,18 @@ public class MeshCombinerEditor : Editor
                 "Create Multi-Material Mesh",
                 "Preserves different materials as submeshes. Disable only when all source submeshes use the same material."));
         EditorGUILayout.PropertyField(_combineInactiveChildren, new GUIContent("Combine Inactive Children"));
-        EditorGUILayout.PropertyField(
-            _meshFiltersToSkip,
-            new GUIContent("Mesh Filters To Skip"),
-            true);
+        EditorGUILayout.PropertyField(_meshFiltersToSkip, new GUIContent("Mesh Filters To Skip"), true);
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(
-            _deactivateCombinedChildren,
-            new GUIContent("Deactivate Combined Children"));
-        EditorGUILayout.PropertyField(
-            _deactivateCombinedChildrenMeshRenderers,
-            new GUIContent("Disable Child MeshRenderers"));
+        EditorGUILayout.PropertyField(_deactivateCombinedChildren, new GUIContent("Deactivate Combined Children"));
+        EditorGUILayout.PropertyField(_deactivateCombinedChildrenMeshRenderers, new GUIContent("Disable Child MeshRenderers"));
         EditorGUILayout.PropertyField(
             _updateOrCreateMeshCollider,
             new GUIContent(
                 "Update/Create MeshCollider",
                 "Assigns the final combined render mesh to a MeshCollider on this GameObject. " +
                 "This fixes the upstream 'Missing collider' case, but does not combine custom primitive colliders."));
-        EditorGUILayout.PropertyField(
-            _generateUVMap,
-            new GUIContent(
-                "Generate Lightmap UV2",
-                "Generates a fresh secondary UV set after combining. " +
-                "The destination is also marked Contribute GI and Receive GI = Lightmaps in Edit Mode."));
-
         EditorGUILayout.PropertyField(
             _destroyCombinedChildren,
             new GUIContent(
@@ -116,10 +104,6 @@ public class MeshCombinerEditor : Editor
         {
             _deactivateCombinedChildren.boolValue = false;
             _deactivateCombinedChildrenMeshRenderers.boolValue = false;
-        }
-
-        if (_destroyCombinedChildren.boolValue)
-        {
             EditorGUILayout.HelpBox(
                 "Destructive mode is enabled. Restore / Undo Combine cannot reconstruct destroyed child objects. " +
                 "Use Unity Undo immediately, or keep source objects deactivated instead.",
@@ -132,18 +116,12 @@ public class MeshCombinerEditor : Editor
         {
             EditorGUILayout.HelpBox(
                 "Child GameObjects stay active, so their existing Colliders also stay active. " +
-                "Adding a combined MeshCollider can create duplicate collision. Disable/remove child Colliders yourself if that is not intended.",
+                "Adding a combined MeshCollider can create duplicate collision.",
                 MessageType.Warning);
         }
 
-        if (_generateUVMap.boolValue)
-        {
-            EditorGUILayout.HelpBox(
-                "UV2 generation uses a 32-bit index buffer before unwrapping. Unity can split vertices while generating lightmap charts, " +
-                "so this avoids the 65,535 vertex failure mode.",
-                MessageType.Info);
-        }
-
+        EditorGUILayout.Space();
+        DrawLightmapUvSettings();
         serializedObject.ApplyModifiedProperties();
 
         EditorGUILayout.Space();
@@ -157,7 +135,6 @@ public class MeshCombinerEditor : Editor
                 if (GUILayout.Button("Combine Meshes", GUILayout.Height(28)))
                 {
                     RestoreSnapshot restoreSnapshot = CaptureRestoreSnapshot(meshCombiner, meshFilter);
-
                     Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Combine Meshes");
 
                     if (meshCombiner.TryCombineMeshes(true))
@@ -190,13 +167,10 @@ public class MeshCombinerEditor : Editor
                     if (TryGetRestoreSnapshot(meshCombiner, out restoreSnapshot))
                     {
                         Mesh generatedMesh = meshFilter.sharedMesh;
-
                         Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Restore Mesh Combine Sources");
                         RestoreExactState(meshCombiner, meshFilter, meshRenderer, restoreSnapshot);
                         ClearRestoreSnapshot(meshCombiner);
 
-                        // Saved .asset meshes stay in the Project. Only temporary generated Mesh objects
-                        // are removed so repeated Combine -> Restore tests do not accumulate orphan meshes.
                         if (generatedMesh != null && !AssetDatabase.Contains(generatedMesh))
                         {
                             Undo.DestroyObjectImmediate(generatedMesh);
@@ -213,27 +187,23 @@ public class MeshCombinerEditor : Editor
         if (hasRestoreSnapshot)
         {
             EditorGUILayout.HelpBox(
-                "Restore will return child MeshFilter GameObjects and MeshRenderers to the exact active/enabled state captured before this combine. " +
-                "Originally inactive helper/variant meshes will stay inactive.",
+                "Restore returns source MeshFilter GameObjects and MeshRenderers to the exact active/enabled state captured before this combine. " +
+                "Originally inactive helper/variant meshes stay inactive.",
                 MessageType.Info);
         }
         else if (meshFilter.sharedMesh != null)
         {
             EditorGUILayout.HelpBox(
-                "This combined mesh has no exact restore snapshot (for example, it was created before this package update or the Editor session was restarted). " +
-                "Use Unity Undo or reopen/reset the source hierarchy before the next comparison test.",
+                "This combined mesh has no exact restore snapshot. Use Unity Undo or reopen/reset the source hierarchy before the next comparison test.",
                 MessageType.Warning);
         }
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Combined Mesh Asset", EditorStyles.boldLabel);
-
         serializedObject.Update();
         EditorGUILayout.PropertyField(
             _folderPath,
-            new GUIContent(
-                "Folder Path",
-                "Path under Assets where the generated Mesh asset will be saved."));
+            new GUIContent("Folder Path", "Path under Assets where the generated Mesh asset will be saved."));
         serializedObject.ApplyModifiedProperties();
 
         string folderPath = meshCombiner.FolderPath;
@@ -250,15 +220,58 @@ public class MeshCombinerEditor : Editor
 
         using (new EditorGUI.DisabledScope(mesh == null || (!isValidPath && !meshIsSaved)))
         {
-            string saveMeshButtonText = meshIsSaved
-                ? "Show Saved Combined Mesh"
-                : "Save Combined Mesh";
-
+            string saveMeshButtonText = meshIsSaved ? "Show Saved Combined Mesh" : "Save Combined Mesh";
             if (GUILayout.Button(saveMeshButtonText))
             {
                 meshCombiner.FolderPath = SaveCombinedMesh(mesh, folderPath);
                 EditorUtility.SetDirty(meshCombiner);
             }
+        }
+    }
+
+    private void DrawLightmapUvSettings()
+    {
+        EditorGUILayout.LabelField("Lightmap UV", EditorStyles.boldLabel);
+        EditorGUILayout.PropertyField(
+            _lightmapUvMode,
+            new GUIContent(
+                "Lightmap UV Mode",
+                "Controls what happens to Mesh.uv2, which baked lightmaps use."));
+
+        LightmapUvMode mode = (LightmapUvMode)_lightmapUvMode.enumValueIndex;
+        switch (mode)
+        {
+            case LightmapUvMode.None:
+                EditorGUILayout.HelpBox(
+                    "No lightmap UV processing. Use this for non-lightmapped output or when UV2 will be handled elsewhere.",
+                    MessageType.Info);
+                break;
+
+            case LightmapUvMode.PreserveSourceUv2:
+                EditorGUILayout.HelpBox(
+                    "Keeps source UV2 exactly as-is. Repeated modular meshes usually overlap after combine, so this mode is mainly diagnostic " +
+                    "unless the sources were already packed into one shared UV space.",
+                    MessageType.Warning);
+                break;
+
+            case LightmapUvMode.PreserveAndRepackSourceUv2:
+                EditorGUILayout.PropertyField(
+                    _repackUvPadding,
+                    new GUIContent(
+                        "Repack Padding",
+                        "Normalized padding around each source UV2 rectangle in the final 0..1 atlas. 0.002 is about one pixel at 512px."));
+                EditorGUILayout.HelpBox(
+                    "Recommended for modular static geometry that already has good UV2. Existing charts are preserved; each source mesh is " +
+                    "scaled/offset into a non-overlapping atlas cell instead of re-unwrapping the whole combined mesh.",
+                    MessageType.Info);
+                break;
+
+            case LightmapUvMode.RegenerateUv2:
+                EditorGUILayout.HelpBox(
+                    "Rebuilds UV2 for the entire combined mesh with Unity's secondary UV unwrapper. This can split vertices and change baked seams. " +
+                    "UInt16 is kept when the total index count proves the regenerated mesh cannot exceed 65,535 vertices; UInt32 is used only when required.",
+                    MessageType.Warning);
+                break;
         }
     }
 
@@ -314,7 +327,6 @@ public class MeshCombinerEditor : Editor
         RestoreSnapshot snapshot)
     {
         Mesh combinedMesh = destinationMeshFilter.sharedMesh;
-
         destinationMeshFilter.sharedMesh = null;
         destinationMeshRenderer.sharedMaterials = Array.Empty<Material>();
 
@@ -332,7 +344,6 @@ public class MeshCombinerEditor : Editor
             {
                 continue;
             }
-
             sourceGameObject.SetActive(state.activeSelf);
             restoredGameObjects++;
         }
@@ -345,14 +356,13 @@ public class MeshCombinerEditor : Editor
             {
                 continue;
             }
-
             sourceRenderer.enabled = state.enabled;
             restoredRenderers++;
         }
 
         Debug.Log(
-            "Mesh Combiner: restored exact pre-combine source state for \"" + meshCombiner.name + "\". " +
-            "Restored " + restoredGameObjects + " GameObject active states and " + restoredRenderers + " MeshRenderer enabled states.",
+            "Mesh Combiner: restored exact pre-combine source state for \"" + meshCombiner.name + "\". Restored " +
+            restoredGameObjects + " GameObject active states and " + restoredRenderers + " MeshRenderer enabled states.",
             meshCombiner);
     }
 
@@ -379,7 +389,6 @@ public class MeshCombinerEditor : Editor
             snapshot = null;
             return false;
         }
-
         snapshot = JsonUtility.FromJson<RestoreSnapshot>(json);
         return snapshot != null;
     }
@@ -427,7 +436,6 @@ public class MeshCombinerEditor : Editor
 
         AssetDatabase.CreateAsset(mesh, meshPath);
         AssetDatabase.SaveAssets();
-
         EditorGUIUtility.PingObject(mesh);
         Debug.Log("Mesh Combiner: saved combined mesh to \"" + meshPath + "\".");
 
@@ -446,17 +454,14 @@ public class MeshCombinerEditor : Editor
     private static void EnsureFolderExists(string folderPath)
     {
         string currentPath = "Assets";
-
         foreach (string rawFolderName in folderPath.Split('/').Where(part => !string.IsNullOrWhiteSpace(part)))
         {
             string folderName = rawFolderName.Trim();
             string nextPath = currentPath + "/" + folderName;
-
             if (!AssetDatabase.IsValidFolder(nextPath))
             {
                 AssetDatabase.CreateFolder(currentPath, folderName);
             }
-
             currentPath = nextPath;
         }
     }
