@@ -2,7 +2,7 @@
 
 A modernized Unity 6 mesh-combining utility for reducing renderer/draw-call overhead and preparing static geometry for baked-lighting workflows.
 
-This project is a fork of `dawid-t/Mesh-Combiner`, substantially updated for current Unity versions, UPM installation, reversible Editor workflows, lightmap UV handling, validation, and collider output.
+This project is a fork of `dawid-t/Mesh-Combiner`, substantially updated for current Unity versions, UPM installation, reversible Editor workflows, lightmap UV handling, conservative geometry cleanup, validation, and collider output.
 
 ## Installation
 
@@ -31,7 +31,7 @@ Package ID:
 com.trafalgardi.mesh-combiner
 ```
 
-Current package version: **2.2.2**
+Current package version: **2.3.0**
 
 ## Requirements
 
@@ -45,7 +45,7 @@ Current package version: **2.2.2**
 1. Create or select a parent GameObject.
 2. Add `MeshFilter`, `MeshRenderer`, and `MeshCombiner` to it.
 3. Put the meshes that should be combined under that GameObject.
-4. Configure material/lightmap/output options in `MeshCombiner`.
+4. Configure material, geometry-cleanup, lightmap, and output options in `MeshCombiner`.
 5. Click **Combine Meshes**.
 6. Validate the result.
 7. Optionally click **Save Combined Mesh** to write the generated mesh as an asset under `Assets`.
@@ -59,6 +59,7 @@ By default source objects are deactivated instead of destroyed so the operation 
 - submesh preservation;
 - shared-material grouping;
 - UInt16/UInt32 index-buffer selection;
+- optional exact opposing-face removal for coincident back-to-back geometry;
 - optional combined `MeshCollider` output;
 - aggregated validation logs;
 - automatic skipping of disabled source renderers;
@@ -105,6 +106,44 @@ The combiner automatically skips the deeper `MeshFilter` when all of the followi
 This detection is generic and does **not** depend on project-specific object names.
 
 It prevents exact duplicate render geometry from being included twice in the generated mesh.
+
+## Geometry Cleanup
+
+### Remove Exact Opposing Faces
+
+This optional mode runs after meshes are combined and before `Regenerate UV2` (when that UV mode is selected).
+
+It searches triangle submeshes for pairs that:
+
+- use the same three destination-local positions within **Position Tolerance**;
+- occupy the same geometric triangle;
+- face in opposite directions.
+
+When a pair matches, both triangle index triplets are removed from the combined mesh. This is intended for exact back-to-back internal faces where modular pieces touch with coincident closed surfaces.
+
+Default values:
+
+```text
+Remove Exact Opposing Faces = Off
+Position Tolerance = 0.0001
+```
+
+The feature is deliberately **off by default**. Intentionally double-sided geometry can also contain coincident opposite-wound triangles and would match this rule.
+
+The cleanup is conservative about vertex data:
+
+- it changes triangle/index buffers only;
+- it does not weld vertices;
+- it does not rewrite normals, tangents, UV0, UV2, colors, skinning data, or other vertex attributes;
+- it does not compact now-unreferenced vertices.
+
+As a result, the triangle count can decrease while the reported vertex count remains unchanged. Vertex compaction should be treated as a separate optimization step so geometry cleanup does not silently alter vertex attributes.
+
+The combine log reports the number of removed opposing face pairs and the effective tolerance.
+
+### What this cleanup does not solve
+
+It is exact-triangle matching, not a Boolean union. It will not remove partially overlapping coplanar surfaces, surfaces with different triangulation/diagonals, small gaps, or non-coincident intersections.
 
 ## Materials and submeshes
 
@@ -165,7 +204,7 @@ Different UV charts can show a different checker **phase/offset** in Unity's Bak
 
 ### Regenerate UV2
 
-Combines the geometry first and then calls Unity's secondary UV unwrapper.
+Combines the geometry first, applies enabled exact-face cleanup, and then calls Unity's secondary UV unwrapper.
 
 This is useful when source meshes do not contain usable UV2, but the unwrap can split vertices and can produce a substantially larger vertex buffer. It can also change the location of baked seams.
 
@@ -183,7 +222,7 @@ For modular environments, validate the result with Unity's Scene View debug mode
 - **UV Overlap** — detect charts whose sampling neighborhoods overlap;
 - **Texel Validity** — find texels invalidated by geometry/backface conditions.
 
-A clean UV Overlap view does not guarantee seamless lighting. Disconnected modular boundaries can still produce invalid texels or visible baked seams.
+A clean UV Overlap view does not guarantee seamless lighting. Disconnected modular boundaries or back-to-back internal geometry can still produce invalid texels or visible baked seams.
 
 ## Restore and recovery
 
@@ -242,6 +281,8 @@ Limitations:
 - custom low-poly collision meshes are not automatically combined separately;
 - using a detailed render mesh as a MeshCollider may be more expensive than a dedicated collision mesh.
 
+If exact opposing-face cleanup is enabled, the generated MeshCollider receives the same cleaned combined render mesh.
+
 ## Saving the combined mesh
 
 Use **Save Combined Mesh** to save the generated mesh as a `.asset` under `Assets`.
@@ -260,30 +301,34 @@ Manual mesh combining can reduce:
 
 - active renderer count;
 - per-renderer CPU overhead;
-- draw-call submission overhead when compatible geometry/materials can be grouped.
+- draw-call submission overhead when compatible geometry/materials can be grouped;
+- triangle work when exact internal opposing faces are safely removed.
 
 Trade-offs:
 
 - combined pieces can no longer be culled independently as separate renderers;
 - combining an entire large level into one mesh can make culling worse;
 - multiple materials still produce multiple submesh/material draws;
+- exact-face cleanup does not currently compact the vertex buffer;
 - modern URP/HDRP projects should still evaluate SRP Batcher and other current rendering optimizations.
 
 Prefer combining logical spatial clusters such as a room, building section, static prop group, or other bounded region rather than blindly combining a whole scene.
 
 ## Current topology limitations
 
-`Mesh.CombineMeshes` concatenates geometry; it is **not** a Boolean union or topology optimizer.
+`Mesh.CombineMeshes` concatenates geometry; it is **not** a Boolean union or general topology optimizer.
 
-The current package does not yet:
+The package can now remove exact coincident opposing triangle pairs when explicitly enabled, but it still does not:
 
 - weld coincident boundary vertices;
 - merge disconnected modular edges;
-- remove internal/coplanar faces;
-- remove arbitrary duplicate triangles;
+- remove partially overlapping coplanar faces;
+- match coincident polygon surfaces that use different triangulation;
+- remove arbitrary same-direction duplicate triangles;
+- compact unused vertices after geometry cleanup;
 - repair gaps, non-manifold geometry, normals, or source topology.
 
-If **UV Overlap** is clean but **Texel Validity** and visible baked seams remain exactly on modular joins, the likely next step is a topology-aware lightmap workflow rather than further atlas-packing adjustments.
+If **UV Overlap** is clean but **Texel Validity** and visible baked seams remain exactly on modular joins after exact opposing-face cleanup, the next step is a topology-aware boundary/welding workflow rather than further atlas-packing adjustments.
 
 Any future welding mode should be optional and conservative because blindly welding by position can break hard normals, UV0 seams, materials, and intentionally disconnected geometry.
 
