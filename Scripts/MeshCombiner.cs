@@ -8,6 +8,7 @@ using UnityEngine.Rendering;
 public class MeshCombiner : MonoBehaviour
 {
     private const int Mesh16BitBufferVertexLimit = 65535;
+    private const int ValidationLogNameLimit = 6;
 
     [Header("Combine")]
     [SerializeField] private bool createMultiMaterialMesh;
@@ -163,6 +164,67 @@ public class MeshCombiner : MonoBehaviour
         return true;
     }
 
+    /// <summary>
+    /// Clears the combined output and makes the source hierarchy visible again.
+    /// Saved Mesh assets are not deleted. This intentionally restores all descendants because
+    /// it is designed as a quick editor iteration command after a combine operation.
+    /// </summary>
+    public void RestoreCombinedState(bool showInfo)
+    {
+        MeshFilter destinationMeshFilter = GetComponent<MeshFilter>();
+        MeshRenderer destinationMeshRenderer = GetComponent<MeshRenderer>();
+        Mesh combinedMesh = destinationMeshFilter.sharedMesh;
+
+        destinationMeshFilter.sharedMesh = null;
+        destinationMeshRenderer.sharedMaterials = new Material[0];
+
+        MeshCollider meshCollider = GetComponent<MeshCollider>();
+        if (meshCollider != null && (combinedMesh == null || meshCollider.sharedMesh == combinedMesh))
+        {
+            meshCollider.sharedMesh = null;
+        }
+
+        int activatedObjects = 0;
+        Transform[] descendants = GetComponentsInChildren<Transform>(true);
+        foreach (Transform descendant in descendants)
+        {
+            if (descendant == null || descendant == transform)
+            {
+                continue;
+            }
+
+            if (!descendant.gameObject.activeSelf)
+            {
+                descendant.gameObject.SetActive(true);
+                activatedObjects++;
+            }
+        }
+
+        int enabledRenderers = 0;
+        MeshRenderer[] renderers = GetComponentsInChildren<MeshRenderer>(true);
+        foreach (MeshRenderer renderer in renderers)
+        {
+            if (renderer == null || renderer == destinationMeshRenderer)
+            {
+                continue;
+            }
+
+            if (!renderer.enabled)
+            {
+                renderer.enabled = true;
+                enabledRenderers++;
+            }
+        }
+
+        if (showInfo)
+        {
+            Debug.Log(
+                "Mesh Combiner: restored source hierarchy for \"" + name + "\". Cleared combined mesh/materials, activated " +
+                activatedObjects + " child GameObjects and re-enabled " + enabledRenderers + " child MeshRenderers.",
+                this);
+        }
+    }
+
     private bool TryGetMeshFiltersToCombine(out List<MeshFilter> meshFilters)
     {
         MeshFilter destinationMeshFilter = GetComponent<MeshFilter>();
@@ -183,6 +245,10 @@ public class MeshCombiner : MonoBehaviour
             return false;
         }
 
+        List<string> missingMeshNames = new List<string>();
+        List<string> missingRendererNames = new List<string>();
+        List<string> nonReadableMeshNames = new List<string>();
+
         for (int i = meshFilters.Count - 1; i >= 0; i--)
         {
             MeshFilter meshFilter = meshFilters[i];
@@ -191,35 +257,46 @@ public class MeshCombiner : MonoBehaviour
 
             if (mesh == null)
             {
-                Debug.LogWarning("Mesh Combiner: skipped \"" + meshFilter.name + "\" because it has no Mesh.", meshFilter);
+                missingMeshNames.Add(meshFilter.name);
                 meshFilters.RemoveAt(i);
                 continue;
             }
 
             if (meshRenderer == null)
             {
-                Debug.LogWarning("Mesh Combiner: skipped \"" + meshFilter.name + "\" because it has no MeshRenderer.", meshFilter);
+                missingRendererNames.Add(meshFilter.name);
                 meshFilters.RemoveAt(i);
                 continue;
             }
 
-            if (Application.isPlaying && !mesh.isReadable)
+            if (!mesh.isReadable)
+            {
+                nonReadableMeshNames.Add(meshFilter.name + " [" + mesh.name + "]");
+            }
+        }
+
+        LogSkippedInputs("no Mesh", missingMeshNames);
+        LogSkippedInputs("no MeshRenderer", missingRendererNames);
+
+        if (nonReadableMeshNames.Count > 0)
+        {
+            string examples = FormatValidationNames(nonReadableMeshNames);
+
+            if (Application.isPlaying)
             {
                 Debug.LogError(
-                    "Mesh Combiner: \"" + meshFilter.name + "\" uses mesh \"" + mesh.name +
-                    "\" with Read/Write disabled. Runtime combining requires CPU-readable source meshes.",
-                    meshFilter);
+                    "Mesh Combiner: " + nonReadableMeshNames.Count +
+                    " source meshes have Read/Write disabled. Runtime combining requires CPU-readable source meshes. " +
+                    "Examples: " + examples + ".",
+                    this);
                 return false;
             }
 
-            if (!Application.isPlaying && !mesh.isReadable)
-            {
-                Debug.LogWarning(
-                    "Mesh Combiner: source mesh \"" + mesh.name +
-                    "\" reports Read/Write disabled. Unity Editor can access mesh data outside Play Mode, " +
-                    "but enable Read/Write if CombineMeshes reports that the mesh is not CPU-readable.",
-                    meshFilter);
-            }
+            Debug.Log(
+                "Mesh Combiner: " + nonReadableMeshNames.Count +
+                " source meshes have Read/Write disabled. This is OK for Edit Mode combining; " +
+                "enable Read/Write only if these meshes must also be combined at runtime. Examples: " + examples + ".",
+                this);
         }
 
         if (meshFilters.Count == 0)
@@ -229,6 +306,32 @@ public class MeshCombiner : MonoBehaviour
         }
 
         return true;
+    }
+
+    private void LogSkippedInputs(string reason, List<string> names)
+    {
+        if (names.Count == 0)
+        {
+            return;
+        }
+
+        Debug.LogWarning(
+            "Mesh Combiner: skipped " + names.Count + " child objects with " + reason + ". Examples: " +
+            FormatValidationNames(names) + ".",
+            this);
+    }
+
+    private static string FormatValidationNames(List<string> names)
+    {
+        int visibleCount = Mathf.Min(names.Count, ValidationLogNameLimit);
+        string value = string.Join(", ", names.Take(visibleCount).ToArray());
+
+        if (names.Count > visibleCount)
+        {
+            value += ", +" + (names.Count - visibleCount) + " more";
+        }
+
+        return value;
     }
 
     private bool TryCombineSingleMaterial(
