@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -18,12 +19,14 @@ public class MeshCombiner : MonoBehaviour
     private const int Mesh16BitBufferVertexLimit = 65535;
     private const int ValidationLogNameLimit = 6;
     private const float MinimumUvExtent = 0.000001f;
+    private const float MinimumArea = 0.0000000001f;
     private const float PackingEpsilon = 0.000001f;
+    private const float UvEdgeQuantization = 100000f;
 
     [Header("Combine")]
     [SerializeField] private bool createMultiMaterialMesh;
     [SerializeField] private bool combineInactiveChildren;
-    [SerializeField] private MeshFilter[] meshFiltersToSkip = new MeshFilter[0];
+    [SerializeField] private MeshFilter[] meshFiltersToSkip = Array.Empty<MeshFilter>();
 
     [Header("Output")]
     [SerializeField] private bool deactivateCombinedChildren = true;
@@ -41,6 +44,9 @@ public class MeshCombiner : MonoBehaviour
 
     private int _lastRepackChartCount;
     private float _lastRepackScale = 1f;
+    private float _lastDensityScaleRangeMin = 1f;
+    private float _lastDensityScaleRangeMax = 1f;
+    private int _lastSkippedDisabledRenderers;
 
     private sealed class UvChart
     {
@@ -48,7 +54,93 @@ public class MeshCombiner : MonoBehaviour
         public List<int> vertexIndices;
         public Rect sourceBounds;
         public Vector2 packedMin;
+        public float relativeDensityScale = 1f;
+        public float sourceUvArea;
+        public float worldArea;
         public int stableOrder;
+    }
+
+    private struct TriangleData
+    {
+        public int a;
+        public int b;
+        public int c;
+    }
+
+    private readonly struct UvPointKey : IEquatable<UvPointKey>, IComparable<UvPointKey>
+    {
+        private readonly int _x;
+        private readonly int _y;
+
+        public UvPointKey(Vector2 uv)
+        {
+            _x = Mathf.RoundToInt(uv.x * UvEdgeQuantization);
+            _y = Mathf.RoundToInt(uv.y * UvEdgeQuantization);
+        }
+
+        public int CompareTo(UvPointKey other)
+        {
+            int xCompare = _x.CompareTo(other._x);
+            return xCompare != 0 ? xCompare : _y.CompareTo(other._y);
+        }
+
+        public bool Equals(UvPointKey other)
+        {
+            return _x == other._x && _y == other._y;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is UvPointKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return (_x * 397) ^ _y;
+            }
+        }
+    }
+
+    private readonly struct UvEdgeKey : IEquatable<UvEdgeKey>
+    {
+        private readonly UvPointKey _a;
+        private readonly UvPointKey _b;
+
+        public UvEdgeKey(Vector2 a, Vector2 b)
+        {
+            UvPointKey pointA = new UvPointKey(a);
+            UvPointKey pointB = new UvPointKey(b);
+            if (pointA.CompareTo(pointB) <= 0)
+            {
+                _a = pointA;
+                _b = pointB;
+            }
+            else
+            {
+                _a = pointB;
+                _b = pointA;
+            }
+        }
+
+        public bool Equals(UvEdgeKey other)
+        {
+            return _a.Equals(other._a) && _b.Equals(other._b);
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is UvEdgeKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return (_a.GetHashCode() * 397) ^ _b.GetHashCode();
+            }
+        }
     }
 
     private sealed class DisjointSet
@@ -111,19 +203,19 @@ public class MeshCombiner : MonoBehaviour
 
     public bool CreateMultiMaterialMesh
     {
-        get { return createMultiMaterialMesh; }
-        set { createMultiMaterialMesh = value; }
+        get => createMultiMaterialMesh;
+        set => createMultiMaterialMesh = value;
     }
 
     public bool CombineInactiveChildren
     {
-        get { return combineInactiveChildren; }
-        set { combineInactiveChildren = value; }
+        get => combineInactiveChildren;
+        set => combineInactiveChildren = value;
     }
 
     public bool DeactivateCombinedChildren
     {
-        get { return deactivateCombinedChildren; }
+        get => deactivateCombinedChildren;
         set
         {
             deactivateCombinedChildren = value;
@@ -133,7 +225,7 @@ public class MeshCombiner : MonoBehaviour
 
     public bool DeactivateCombinedChildrenMeshRenderers
     {
-        get { return deactivateCombinedChildrenMeshRenderers; }
+        get => deactivateCombinedChildrenMeshRenderers;
         set
         {
             deactivateCombinedChildrenMeshRenderers = value;
@@ -143,38 +235,37 @@ public class MeshCombiner : MonoBehaviour
 
     public bool UpdateOrCreateMeshCollider
     {
-        get { return updateOrCreateMeshCollider; }
-        set { updateOrCreateMeshCollider = value; }
+        get => updateOrCreateMeshCollider;
+        set => updateOrCreateMeshCollider = value;
     }
 
     public LightmapUvMode UvMode
     {
-        get { return lightmapUvMode; }
-        set { lightmapUvMode = value; }
+        get => lightmapUvMode;
+        set => lightmapUvMode = value;
     }
 
     public int RepackPaddingTexels
     {
-        get { return repackPaddingTexels; }
-        set { repackPaddingTexels = Mathf.Clamp(value, 1, 16); }
+        get => repackPaddingTexels;
+        set => repackPaddingTexels = Mathf.Clamp(value, 1, 16);
     }
 
     public int RepackPaddingReferenceResolution
     {
-        get { return repackPaddingReferenceResolution; }
-        set { repackPaddingReferenceResolution = Mathf.Clamp(value, 128, 4096); }
+        get => repackPaddingReferenceResolution;
+        set => repackPaddingReferenceResolution = Mathf.Clamp(value, 128, 4096);
     }
 
-    // Backwards-compatible API from the first Unity 6 fork revision.
     public bool GenerateUVMap
     {
-        get { return lightmapUvMode == LightmapUvMode.RegenerateUv2; }
-        set { lightmapUvMode = value ? LightmapUvMode.RegenerateUv2 : LightmapUvMode.None; }
+        get => lightmapUvMode == LightmapUvMode.RegenerateUv2;
+        set => lightmapUvMode = value ? LightmapUvMode.RegenerateUv2 : LightmapUvMode.None;
     }
 
     public bool DestroyCombinedChildren
     {
-        get { return destroyCombinedChildren; }
+        get => destroyCombinedChildren;
         set
         {
             destroyCombinedChildren = value;
@@ -184,8 +275,8 @@ public class MeshCombiner : MonoBehaviour
 
     public string FolderPath
     {
-        get { return folderPath; }
-        set { folderPath = value; }
+        get => folderPath;
+        set => folderPath = value;
     }
 
     private void CheckDeactivateCombinedChildren()
@@ -212,22 +303,18 @@ public class MeshCombiner : MonoBehaviour
 
     public bool TryCombineMeshes(bool showCreatedMeshInfo)
     {
-        List<MeshFilter> sourceMeshFilters;
-        if (!TryGetMeshFiltersToCombine(out sourceMeshFilters))
+        if (!TryGetMeshFiltersToCombine(out List<MeshFilter> sourceMeshFilters))
         {
             return false;
         }
 
-        Dictionary<MeshFilter, Mesh> sourceMeshes;
-        List<Mesh> temporaryUvMeshes;
-        if (!TryPrepareSourceMeshesForUvMode(sourceMeshFilters, out sourceMeshes, out temporaryUvMeshes))
+        if (!TryPrepareSourceMeshesForUvMode(sourceMeshFilters, out Dictionary<MeshFilter, Mesh> sourceMeshes, out List<Mesh> temporaryUvMeshes))
         {
             return false;
         }
 
         Mesh combinedMesh = null;
         List<Material> outputMaterials;
-
         try
         {
             bool combined = createMultiMaterialMesh
@@ -243,8 +330,7 @@ public class MeshCombiner : MonoBehaviour
             combinedMesh.RecalculateBounds();
 
             int verticesBeforeUvGeneration = combinedMesh.vertexCount;
-            bool uvGenerated = GenerateUVIfRequested(combinedMesh);
-            if (lightmapUvMode == LightmapUvMode.RegenerateUv2 && !uvGenerated)
+            if (lightmapUvMode == LightmapUvMode.RegenerateUv2 && !GenerateUVIfRequested(combinedMesh))
             {
                 DestroyTemporaryMesh(combinedMesh);
                 return false;
@@ -266,8 +352,7 @@ public class MeshCombiner : MonoBehaviour
                     "<color=#00cc00><b>Mesh \"" + name + "\" was created from " + sourceMeshFilters.Count +
                     " child meshes, " + combinedMesh.subMeshCount + " submeshes, " + combinedMesh.vertexCount +
                     " vertices and " + CountTriangles(combinedMesh) + " triangles" + BuildLightmapResultMessage(addedVertices) +
-                    ".</b></color>",
-                    this);
+                    ".</b></color>", this);
             }
 
             return true;
@@ -281,10 +366,6 @@ public class MeshCombiner : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Clears only the combined output. Exact source hierarchy restoration is handled by the custom
-    /// Editor inspector because it keeps a snapshot of the pre-combine active/enabled state.
-    /// </summary>
     public void RestoreCombinedState(bool showInfo)
     {
         MeshFilter destinationMeshFilter = GetComponent<MeshFilter>();
@@ -292,7 +373,7 @@ public class MeshCombiner : MonoBehaviour
         Mesh combinedMesh = destinationMeshFilter.sharedMesh;
 
         destinationMeshFilter.sharedMesh = null;
-        destinationMeshRenderer.sharedMaterials = new Material[0];
+        destinationMeshRenderer.sharedMaterials = Array.Empty<Material>();
 
         MeshCollider meshCollider = GetComponent<MeshCollider>();
         if (meshCollider != null && (combinedMesh == null || meshCollider.sharedMesh == combinedMesh))
@@ -302,20 +383,16 @@ public class MeshCombiner : MonoBehaviour
 
         if (showInfo)
         {
-            Debug.Log(
-                "Mesh Combiner: cleared combined output for \"" + name +
-                "\". Use the Editor Restore / Undo Combine button to restore the exact source hierarchy state.",
-                this);
+            Debug.Log("Mesh Combiner: cleared combined output for \"" + name + "\". Use the Editor Restore / Undo Combine button to restore the exact source hierarchy state.", this);
         }
     }
 
     private bool TryGetMeshFiltersToCombine(out List<MeshFilter> meshFilters)
     {
         MeshFilter destinationMeshFilter = GetComponent<MeshFilter>();
-        HashSet<MeshFilter> skipped = new HashSet<MeshFilter>(
-            meshFiltersToSkip == null
-                ? Enumerable.Empty<MeshFilter>()
-                : meshFiltersToSkip.Where(meshFilter => meshFilter != null));
+        HashSet<MeshFilter> skipped = new HashSet<MeshFilter>(meshFiltersToSkip == null
+            ? Enumerable.Empty<MeshFilter>()
+            : meshFiltersToSkip.Where(meshFilter => meshFilter != null));
 
         meshFilters = GetComponentsInChildren<MeshFilter>(combineInactiveChildren)
             .Where(meshFilter => meshFilter != null)
@@ -331,6 +408,7 @@ public class MeshCombiner : MonoBehaviour
 
         List<string> missingMeshNames = new List<string>();
         List<string> missingRendererNames = new List<string>();
+        List<string> disabledRendererNames = new List<string>();
         List<string> nonReadableMeshNames = new List<string>();
 
         for (int i = meshFilters.Count - 1; i >= 0; i--)
@@ -353,53 +431,63 @@ public class MeshCombiner : MonoBehaviour
                 continue;
             }
 
+            if (!meshRenderer.enabled)
+            {
+                disabledRendererNames.Add(meshFilter.name + " [" + mesh.name + "]");
+                meshFilters.RemoveAt(i);
+                continue;
+            }
+
             if (!mesh.isReadable)
             {
                 nonReadableMeshNames.Add(meshFilter.name + " [" + mesh.name + "]");
             }
         }
 
+        _lastSkippedDisabledRenderers = disabledRendererNames.Count;
         LogSkippedInputs("no Mesh", missingMeshNames);
         LogSkippedInputs("no MeshRenderer", missingRendererNames);
+
+        if (disabledRendererNames.Count > 0)
+        {
+            Debug.Log("Mesh Combiner: skipped " + disabledRendererNames.Count +
+                      " child meshes whose MeshRenderer is disabled. Hidden/bake-proxy renderers are not combined. Examples: " +
+                      FormatValidationNames(disabledRendererNames) + ".", this);
+        }
 
         if (nonReadableMeshNames.Count > 0)
         {
             string examples = FormatValidationNames(nonReadableMeshNames);
             if (Application.isPlaying)
             {
-                Debug.LogError(
-                    "Mesh Combiner: " + nonReadableMeshNames.Count +
-                    " source meshes have Read/Write disabled. Runtime combining requires CPU-readable source meshes. " +
-                    "Examples: " + examples + ".",
-                    this);
+                Debug.LogError("Mesh Combiner: " + nonReadableMeshNames.Count +
+                               " source meshes have Read/Write disabled. Runtime combining requires CPU-readable source meshes. Examples: " +
+                               examples + ".", this);
                 return false;
             }
 
-            Debug.Log(
-                "Mesh Combiner: " + nonReadableMeshNames.Count +
-                " source meshes have Read/Write disabled. This is OK for Edit Mode combining; " +
-                "enable Read/Write only if these meshes must also be combined at runtime. Examples: " + examples + ".",
-                this);
+            Debug.Log("Mesh Combiner: " + nonReadableMeshNames.Count +
+                      " source meshes have Read/Write disabled. This is OK for Edit Mode combining; enable Read/Write only if these meshes must also be combined at runtime. Examples: " +
+                      examples + ".", this);
         }
 
         if (meshFilters.Count == 0)
         {
-            Debug.LogError("Mesh Combiner: no valid child meshes remain after validation.", this);
+            Debug.LogError("Mesh Combiner: no valid enabled child meshes remain after validation.", this);
             return false;
         }
 
         return true;
     }
 
-    private bool TryPrepareSourceMeshesForUvMode(
-        List<MeshFilter> meshFilters,
-        out Dictionary<MeshFilter, Mesh> sourceMeshes,
-        out List<Mesh> temporaryMeshes)
+    private bool TryPrepareSourceMeshesForUvMode(List<MeshFilter> meshFilters, out Dictionary<MeshFilter, Mesh> sourceMeshes, out List<Mesh> temporaryMeshes)
     {
         sourceMeshes = meshFilters.ToDictionary(meshFilter => meshFilter, meshFilter => meshFilter.sharedMesh);
         temporaryMeshes = new List<Mesh>();
         _lastRepackChartCount = 0;
         _lastRepackScale = 1f;
+        _lastDensityScaleRangeMin = 1f;
+        _lastDensityScaleRangeMax = 1f;
 
         if (lightmapUvMode != LightmapUvMode.PreserveAndRepackSourceUv2)
         {
@@ -421,9 +509,7 @@ public class MeshCombiner : MonoBehaviour
                 continue;
             }
 
-            List<UvChart> meshCharts;
-            string chartError;
-            if (!TryExtractUvCharts(meshFilter, mesh, uv2, ref stableOrder, out meshCharts, out chartError))
+            if (!TryExtractUvCharts(meshFilter, mesh, uv2, ref stableOrder, out List<UvChart> meshCharts, out string chartError))
             {
                 invalidUv2Names.Add(meshFilter.name + " [" + mesh.name + ": " + chartError + "]");
                 continue;
@@ -435,25 +521,21 @@ public class MeshCombiner : MonoBehaviour
 
         if (invalidUv2Names.Count > 0)
         {
-            Debug.LogError(
-                "Mesh Combiner: Preserve & Repack Source UV2 requires valid triangle UV2 charts on every source mesh. " +
-                invalidUv2Names.Count + " source meshes failed validation. Examples: " +
-                FormatValidationNames(invalidUv2Names) +
-                ". Fix/generate source lightmap UVs or switch Lightmap UV Mode to Regenerate UV2.",
-                this);
+            Debug.LogError("Mesh Combiner: Preserve & Repack Source UV2 requires valid triangle UV2 charts on every source mesh. " +
+                           invalidUv2Names.Count + " source meshes failed validation. Examples: " + FormatValidationNames(invalidUv2Names) +
+                           ". Fix/generate source lightmap UVs or switch Lightmap UV Mode to Regenerate UV2.", this);
             return false;
         }
 
+        NormalizeChartDensityScales(allCharts);
+
         float padding = Mathf.Clamp(repackPaddingTexels, 1, 16) /
                         (float)Mathf.Clamp(repackPaddingReferenceResolution, 128, 4096);
-        float globalScale;
-        if (!TryPackUvCharts(allCharts, padding, out globalScale))
+        if (!TryPackUvCharts(allCharts, padding, out float globalScale))
         {
-            Debug.LogError(
-                "Mesh Combiner: UV2 chart packing failed. There are " + allCharts.Count +
-                " charts and the requested padding is " + repackPaddingTexels + " texels at a " +
-                repackPaddingReferenceResolution + " reference resolution. Lower the padding or use Regenerate UV2.",
-                this);
+            Debug.LogError("Mesh Combiner: UV2 chart packing failed. There are " + allCharts.Count +
+                           " charts and the requested padding is " + repackPaddingTexels + " texels at a " +
+                           repackPaddingReferenceResolution + " reference resolution. Lower the padding or use Regenerate UV2.", this);
             return false;
         }
 
@@ -467,10 +549,11 @@ public class MeshCombiner : MonoBehaviour
             foreach (UvChart chart in chartsByMeshFilter[meshFilter])
             {
                 Vector2 sourceMin = chart.sourceBounds.min;
+                float finalScale = chart.relativeDensityScale * globalScale;
                 foreach (int vertexIndex in chart.vertexIndices)
                 {
                     Vector2 localUv = uv2[vertexIndex] - sourceMin;
-                    uv2[vertexIndex] = chart.packedMin + localUv * globalScale;
+                    uv2[vertexIndex] = chart.packedMin + localUv * finalScale;
                 }
             }
 
@@ -484,20 +567,12 @@ public class MeshCombiner : MonoBehaviour
         return true;
     }
 
-    private bool TryExtractUvCharts(
-        MeshFilter meshFilter,
-        Mesh mesh,
-        Vector2[] uv2,
-        ref int stableOrder,
-        out List<UvChart> charts,
-        out string error)
+    private bool TryExtractUvCharts(MeshFilter meshFilter, Mesh mesh, Vector2[] uv2, ref int stableOrder, out List<UvChart> charts, out string error)
     {
         charts = new List<UvChart>();
         error = null;
 
-        DisjointSet disjointSet = new DisjointSet(mesh.vertexCount);
-        bool[] usedVertices = new bool[mesh.vertexCount];
-
+        List<TriangleData> triangles = new List<TriangleData>();
         for (int subMeshIndex = 0; subMeshIndex < mesh.subMeshCount; subMeshIndex++)
         {
             if (mesh.GetTopology(subMeshIndex) != MeshTopology.Triangles)
@@ -515,76 +590,138 @@ public class MeshCombiner : MonoBehaviour
 
             for (int i = 0; i < indices.Length; i += 3)
             {
-                int a = indices[i];
-                int b = indices[i + 1];
-                int c = indices[i + 2];
-
-                usedVertices[a] = true;
-                usedVertices[b] = true;
-                usedVertices[c] = true;
-                disjointSet.Union(a, b);
-                disjointSet.Union(b, c);
-                disjointSet.Union(c, a);
+                triangles.Add(new TriangleData { a = indices[i], b = indices[i + 1], c = indices[i + 2] });
             }
         }
 
-        Dictionary<int, List<int>> verticesByRoot = new Dictionary<int, List<int>>();
-        for (int vertexIndex = 0; vertexIndex < usedVertices.Length; vertexIndex++)
+        if (triangles.Count == 0)
         {
-            if (!usedVertices[vertexIndex])
-            {
-                continue;
-            }
-
-            int root = disjointSet.Find(vertexIndex);
-            List<int> vertexIndices;
-            if (!verticesByRoot.TryGetValue(root, out vertexIndices))
-            {
-                vertexIndices = new List<int>();
-                verticesByRoot.Add(root, vertexIndices);
-            }
-            vertexIndices.Add(vertexIndex);
+            error = "no triangles";
+            return false;
         }
 
-        foreach (List<int> vertexIndices in verticesByRoot.Values)
+        DisjointSet triangleSets = new DisjointSet(triangles.Count);
+        Dictionary<UvEdgeKey, int> edgeOwners = new Dictionary<UvEdgeKey, int>();
+        for (int triangleIndex = 0; triangleIndex < triangles.Count; triangleIndex++)
         {
-            if (vertexIndices.Count == 0)
-            {
-                continue;
-            }
+            TriangleData triangle = triangles[triangleIndex];
+            RegisterUvEdge(uv2[triangle.a], uv2[triangle.b], triangleIndex, triangleSets, edgeOwners);
+            RegisterUvEdge(uv2[triangle.b], uv2[triangle.c], triangleIndex, triangleSets, edgeOwners);
+            RegisterUvEdge(uv2[triangle.c], uv2[triangle.a], triangleIndex, triangleSets, edgeOwners);
+        }
 
-            Vector2 min = uv2[vertexIndices[0]];
-            Vector2 max = min;
-            for (int i = 1; i < vertexIndices.Count; i++)
+        Dictionary<int, List<int>> triangleIndicesByRoot = new Dictionary<int, List<int>>();
+        for (int triangleIndex = 0; triangleIndex < triangles.Count; triangleIndex++)
+        {
+            int root = triangleSets.Find(triangleIndex);
+            if (!triangleIndicesByRoot.TryGetValue(root, out List<int> triangleIndices))
             {
-                Vector2 uv = uv2[vertexIndices[i]];
-                min = Vector2.Min(min, uv);
-                max = Vector2.Max(max, uv);
+                triangleIndices = new List<int>();
+                triangleIndicesByRoot.Add(root, triangleIndices);
+            }
+            triangleIndices.Add(triangleIndex);
+        }
+
+        Vector3[] vertices = mesh.vertices;
+        Matrix4x4 localToWorld = meshFilter.transform.localToWorldMatrix;
+        float sourceScaleInLightmap = 1f;
+#if UNITY_EDITOR
+        MeshRenderer sourceRenderer = meshFilter.GetComponent<MeshRenderer>();
+        if (!Application.isPlaying && sourceRenderer != null)
+        {
+            sourceScaleInLightmap = Mathf.Max(0.0001f, sourceRenderer.scaleInLightmap);
+        }
+#endif
+
+        foreach (List<int> triangleIndices in triangleIndicesByRoot.Values)
+        {
+            HashSet<int> vertexSet = new HashSet<int>();
+            Vector2 min = new Vector2(float.PositiveInfinity, float.PositiveInfinity);
+            Vector2 max = new Vector2(float.NegativeInfinity, float.NegativeInfinity);
+            float uvArea = 0f;
+            float worldArea = 0f;
+
+            foreach (int triangleIndex in triangleIndices)
+            {
+                TriangleData triangle = triangles[triangleIndex];
+                vertexSet.Add(triangle.a);
+                vertexSet.Add(triangle.b);
+                vertexSet.Add(triangle.c);
+
+                Vector2 uvA = uv2[triangle.a];
+                Vector2 uvB = uv2[triangle.b];
+                Vector2 uvC = uv2[triangle.c];
+                min = Vector2.Min(min, Vector2.Min(uvA, Vector2.Min(uvB, uvC)));
+                max = Vector2.Max(max, Vector2.Max(uvA, Vector2.Max(uvB, uvC)));
+                uvArea += Mathf.Abs(Cross2D(uvB - uvA, uvC - uvA)) * 0.5f;
+
+                Vector3 worldA = localToWorld.MultiplyPoint3x4(vertices[triangle.a]);
+                Vector3 worldB = localToWorld.MultiplyPoint3x4(vertices[triangle.b]);
+                Vector3 worldC = localToWorld.MultiplyPoint3x4(vertices[triangle.c]);
+                worldArea += Vector3.Cross(worldB - worldA, worldC - worldA).magnitude * 0.5f;
             }
 
             Vector2 size = max - min;
-            if (size.x <= MinimumUvExtent || size.y <= MinimumUvExtent)
+            if (size.x <= MinimumUvExtent || size.y <= MinimumUvExtent || uvArea <= MinimumArea || worldArea <= MinimumArea)
             {
-                error = "degenerate UV2 chart";
+                error = "degenerate UV2/world-area chart";
                 return false;
             }
 
+            float densityScale = Mathf.Sqrt(worldArea / uvArea) * sourceScaleInLightmap;
             charts.Add(new UvChart
             {
                 meshFilter = meshFilter,
-                vertexIndices = vertexIndices,
+                vertexIndices = vertexSet.ToList(),
                 sourceBounds = new Rect(min, size),
+                sourceUvArea = uvArea,
+                worldArea = worldArea,
+                relativeDensityScale = densityScale,
                 stableOrder = stableOrder++
             });
         }
 
         if (charts.Count == 0)
         {
-            error = "no triangle UV2 charts";
+            error = "no UV2 charts";
             return false;
         }
 
         return true;
+    }
+
+    private static void RegisterUvEdge(Vector2 a, Vector2 b, int triangleIndex, DisjointSet triangleSets, Dictionary<UvEdgeKey, int> edgeOwners)
+    {
+        UvEdgeKey edge = new UvEdgeKey(a, b);
+        if (edgeOwners.TryGetValue(edge, out int ownerTriangle))
+        {
+            triangleSets.Union(ownerTriangle, triangleIndex);
+        }
+        else
+        {
+            edgeOwners.Add(edge, triangleIndex);
+        }
+    }
+
+    private void NormalizeChartDensityScales(List<UvChart> charts)
+    {
+        float maxScale = charts.Max(chart => chart.relativeDensityScale);
+        if (maxScale <= MinimumUvExtent)
+        {
+            maxScale = 1f;
+        }
+
+        float minNormalized = float.PositiveInfinity;
+        float maxNormalized = 0f;
+        foreach (UvChart chart in charts)
+        {
+            chart.relativeDensityScale /= maxScale;
+            minNormalized = Mathf.Min(minNormalized, chart.relativeDensityScale);
+            maxNormalized = Mathf.Max(maxNormalized, chart.relativeDensityScale);
+        }
+
+        _lastDensityScaleRangeMin = minNormalized;
+        _lastDensityScaleRangeMax = maxNormalized;
     }
 
     private bool TryPackUvCharts(List<UvChart> charts, float padding, out float scale)
@@ -596,8 +733,8 @@ public class MeshCombiner : MonoBehaviour
         }
 
         List<UvChart> orderedCharts = charts
-            .OrderByDescending(chart => chart.sourceBounds.height)
-            .ThenByDescending(chart => chart.sourceBounds.width)
+            .OrderByDescending(chart => chart.sourceBounds.height * chart.relativeDensityScale)
+            .ThenByDescending(chart => chart.sourceBounds.width * chart.relativeDensityScale)
             .ThenBy(chart => chart.stableOrder)
             .ToList();
 
@@ -627,12 +764,7 @@ public class MeshCombiner : MonoBehaviour
             }
         }
 
-        if (low <= MinimumUvExtent)
-        {
-            return false;
-        }
-
-        if (!TryShelfPack(orderedCharts, low, padding, true))
+        if (low <= MinimumUvExtent || !TryShelfPack(orderedCharts, low, padding, true))
         {
             return false;
         }
@@ -649,8 +781,9 @@ public class MeshCombiner : MonoBehaviour
 
         foreach (UvChart chart in charts)
         {
-            float contentWidth = chart.sourceBounds.width * scale;
-            float contentHeight = chart.sourceBounds.height * scale;
+            float chartScale = chart.relativeDensityScale * scale;
+            float contentWidth = chart.sourceBounds.width * chartScale;
+            float contentHeight = chart.sourceBounds.height * chartScale;
             float outerWidth = contentWidth + padding * 2f;
             float outerHeight = contentHeight + padding * 2f;
 
@@ -683,11 +816,7 @@ public class MeshCombiner : MonoBehaviour
         return true;
     }
 
-    private bool TryCombineSingleMaterial(
-        List<MeshFilter> meshFilters,
-        Dictionary<MeshFilter, Mesh> sourceMeshes,
-        out Mesh combinedMesh,
-        out List<Material> outputMaterials)
+    private bool TryCombineSingleMaterial(List<MeshFilter> meshFilters, Dictionary<MeshFilter, Mesh> sourceMeshes, out Mesh combinedMesh, out List<Material> outputMaterials)
     {
         combinedMesh = null;
         outputMaterials = new List<Material>();
@@ -705,11 +834,8 @@ public class MeshCombiner : MonoBehaviour
 
             if (materials.Length < mesh.subMeshCount)
             {
-                Debug.LogError(
-                    "Mesh Combiner: \"" + meshFilter.name + "\" has " + mesh.subMeshCount +
-                    " submeshes but only " + materials.Length +
-                    " materials. Fix the renderer or use a valid material layout before combining.",
-                    meshFilter);
+                Debug.LogError("Mesh Combiner: \"" + meshFilter.name + "\" has " + mesh.subMeshCount +
+                               " submeshes but only " + materials.Length + " materials. Fix the renderer or use a valid material layout before combining.", meshFilter);
                 return false;
             }
 
@@ -723,10 +849,7 @@ public class MeshCombiner : MonoBehaviour
                 }
                 else if (material != sharedMaterial)
                 {
-                    Debug.LogError(
-                        "Mesh Combiner: Single Material mode found more than one material. " +
-                        "Enable Create Multi-Material Mesh to preserve all materials.",
-                        meshFilter);
+                    Debug.LogError("Mesh Combiner: Single Material mode found more than one material. Enable Create Multi-Material Mesh to preserve all materials.", meshFilter);
                     return false;
                 }
 
@@ -752,11 +875,7 @@ public class MeshCombiner : MonoBehaviour
         return true;
     }
 
-    private bool TryCombineMultiMaterial(
-        List<MeshFilter> meshFilters,
-        Dictionary<MeshFilter, Mesh> sourceMeshes,
-        out Mesh combinedMesh,
-        out List<Material> outputMaterials)
+    private bool TryCombineMultiMaterial(List<MeshFilter> meshFilters, Dictionary<MeshFilter, Mesh> sourceMeshes, out Mesh combinedMesh, out List<Material> outputMaterials)
     {
         combinedMesh = null;
         outputMaterials = new List<Material>();
@@ -772,10 +891,8 @@ public class MeshCombiner : MonoBehaviour
 
             if (materials.Length < mesh.subMeshCount)
             {
-                Debug.LogError(
-                    "Mesh Combiner: \"" + meshFilter.name + "\" has " + mesh.subMeshCount +
-                    " submeshes but only " + materials.Length + " materials.",
-                    meshFilter);
+                Debug.LogError("Mesh Combiner: \"" + meshFilter.name + "\" has " + mesh.subMeshCount +
+                               " submeshes but only " + materials.Length + " materials.", meshFilter);
                 return false;
             }
 
@@ -860,21 +977,15 @@ public class MeshCombiner : MonoBehaviour
         }
 
 #if UNITY_EDITOR
-        UnityEditor.UnwrapParam unwrapParam;
-        UnityEditor.UnwrapParam.SetDefaults(out unwrapParam);
+        UnityEditor.UnwrapParam.SetDefaults(out UnityEditor.UnwrapParam unwrapParam);
         bool success = UnityEditor.Unwrapping.GenerateSecondaryUVSet(combinedMesh, unwrapParam);
         if (!success)
         {
-            Debug.LogError(
-                "Mesh Combiner: Unity failed to regenerate UV2 for \"" + combinedMesh.name +
-                "\". The output mesh was not assigned.",
-                this);
+            Debug.LogError("Mesh Combiner: Unity failed to regenerate UV2 for \"" + combinedMesh.name + "\". The output mesh was not assigned.", this);
         }
         return success;
 #else
-        Debug.LogError(
-            "Mesh Combiner: Regenerate UV2 is Editor-only. Use None/Preserve modes for runtime combining.",
-            this);
+        Debug.LogError("Mesh Combiner: Regenerate UV2 is Editor-only. Use None/Preserve modes for runtime combining.", this);
         return false;
 #endif
     }
@@ -887,10 +998,8 @@ public class MeshCombiner : MonoBehaviour
             return;
         }
 
-        UnityEditor.StaticEditorFlags staticFlags =
-            UnityEditor.GameObjectUtility.GetStaticEditorFlags(gameObject) |
-            UnityEditor.StaticEditorFlags.ContributeGI;
-
+        UnityEditor.StaticEditorFlags staticFlags = UnityEditor.GameObjectUtility.GetStaticEditorFlags(gameObject) |
+                                                     UnityEditor.StaticEditorFlags.ContributeGI;
         UnityEditor.GameObjectUtility.SetStaticEditorFlags(gameObject, staticFlags);
         destinationMeshRenderer.receiveGI = ReceiveGI.Lightmaps;
         destinationMeshRenderer.stitchLightmapSeams = true;
@@ -977,14 +1086,26 @@ public class MeshCombiner : MonoBehaviour
             case LightmapUvMode.PreserveSourceUv2:
                 return ", source UV2 preserved without repacking";
             case LightmapUvMode.PreserveAndRepackSourceUv2:
-                return ", " + _lastRepackChartCount + " source UV2 charts repacked with one global scale " +
-                       _lastRepackScale.ToString("0.###") + " and " + repackPaddingTexels + " texel padding @ " +
-                       repackPaddingReferenceResolution + " reference";
+                string skippedDisabled = _lastSkippedDisabledRenderers > 0
+                    ? ", skipped " + _lastSkippedDisabledRenderers + " disabled renderers"
+                    : string.Empty;
+                return ", " + _lastRepackChartCount +
+                       " source UV2 charts repacked by world-space surface area, global packing scale " +
+                       _lastRepackScale.ToString("0.###") + ", density range " +
+                       _lastDensityScaleRangeMin.ToString("0.###") + ".." +
+                       _lastDensityScaleRangeMax.ToString("0.###") + " and " +
+                       repackPaddingTexels + " texel padding @ " + repackPaddingReferenceResolution +
+                       " reference" + skippedDisabled;
             case LightmapUvMode.RegenerateUv2:
                 return ", UV2 regenerated (+" + Mathf.Max(0, addedVertices) + " vertices from chart splits)";
             default:
                 return string.Empty;
         }
+    }
+
+    private static float Cross2D(Vector2 a, Vector2 b)
+    {
+        return a.x * b.y - a.y * b.x;
     }
 
     private static long CountTriangles(Mesh mesh)
@@ -1007,16 +1128,14 @@ public class MeshCombiner : MonoBehaviour
             return;
         }
 
-        Debug.LogWarning(
-            "Mesh Combiner: skipped " + names.Count + " child objects with " + reason + ". Examples: " +
-            FormatValidationNames(names) + ".",
-            this);
+        Debug.LogWarning("Mesh Combiner: skipped " + names.Count + " child objects with " + reason + ". Examples: " +
+                         FormatValidationNames(names) + ".", this);
     }
 
     private static string FormatValidationNames(List<string> names)
     {
         int visibleCount = Mathf.Min(names.Count, ValidationLogNameLimit);
-        string value = string.Join(", ", names.Take(visibleCount).ToArray());
+        string value = string.Join(", ", names.Take(visibleCount));
         if (names.Count > visibleCount)
         {
             value += ", +" + (names.Count - visibleCount) + " more";
