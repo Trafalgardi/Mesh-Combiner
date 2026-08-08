@@ -2,6 +2,25 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.4.0] - 2026-08-08
+
+### Added
+
+- Added experimental **Coplanar Stitched UV2** generator under `Tools -> Mesh Combiner -> Coplanar Stitched UV2...`.
+- The generator groups triangles through matching world-space geometric edges and only joins neighbors whose normals are within a configurable coplanar-angle threshold.
+- Connected coplanar surfaces are planar-projected into one continuous UV2 chart so modular boundaries can share the same lightmap chart without welding render topology.
+- All generated charts use one global world-space scale before packing, preserving consistent texel density.
+- Added configurable edge-position tolerance, coplanar angle, chart padding, and padding reference size.
+- The tool clones the current combined mesh before replacing UV2, so saved/imported mesh assets are not modified in place.
+- If the combined MeshCollider references the previous mesh, it is updated to the UV2 clone.
+
+### Safety / validation
+
+- Geometry, UV0, normals, tangents, materials and triangle topology are not modified.
+- Generation aborts rather than corrupting UV2 when one vertex index is shared by multiple generated hard-angle charts and would require safe vertex splitting.
+- Current experimental implementation requires triangle topology.
+- This mode intentionally targets lightmap seams after `UV Overlap` and `Texel Validity` are already clean; it is not a Boolean union or geometry weld.
+
 ## [2.3.0] - 2026-08-08
 
 ### Added
