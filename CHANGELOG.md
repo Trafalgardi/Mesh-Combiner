@@ -2,6 +2,20 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.2.1] - 2026-08-08
+
+### Fixed
+
+- Added automatic filtering for nested exact-duplicate source geometry.
+- If a child MeshFilter references the same shared Mesh as an ancestor and both objects have effectively the same world transform, the deeper child is omitted from the combine.
+- This specifically addresses helper/bake-proxy hierarchies where one visible wall and one nested proxy were both being included. The real-scene test selected 119 wall objects but the previous combiner consumed 238 source meshes.
+- Duplicate filtering is based on mesh identity + hierarchy + world transform, not on project-specific names such as `HF_WallBakeProxy`.
+- Combine logs now report how many nested exact duplicates were skipped.
+
+### Validation note
+
+- In the 2.2.0 test, **UV Overlap** was essentially clean while **Texel Validity** showed invalid texels exactly along modular boundaries. Visible baked seams aligned with those boundaries. Duplicate geometry must be eliminated before topology welding or a topology-aware lightmap unwrap is evaluated.
+
 ## [2.2.0] - 2026-08-08
 
 ### Fixed
@@ -9,19 +23,18 @@ All notable changes to this fork are documented in this file.
 - **Preserve And Repack Source UV2** now sizes UV charts from their world-space surface area instead of trusting the normalized size of each source asset's authored UV2 layout.
 - This fixes inconsistent lightmap texel density between differently sized modular pieces whose authored lightmap UVs each independently fill most of the 0..1 range.
 - UV chart connectivity is now detected through shared UV edges, so hard-normal vertex splits do not unnecessarily turn one authored UV island into several packing charts.
-- Child MeshFilters whose `MeshRenderer.enabled` is false are skipped automatically. This prevents disabled bake proxies/helper renderers from being duplicated into the combined geometry.
+- Child MeshFilters whose `MeshRenderer.enabled` is false are skipped automatically.
 
 ### Changed
 
-- Chart packing still preserves authored UV2 topology, but applies a per-chart density correction based on `sqrt(world surface area / source UV area)` before the final global atlas packing scale.
+- Chart packing preserves authored UV2 topology, but applies a per-chart density correction based on `sqrt(world surface area / source UV area)` before the final global atlas packing scale.
 - Source `Scale In Lightmap` is included in the relative chart scale in Edit Mode.
-- Combine logs now report skipped disabled renderers and the normalized chart-density range in addition to chart count/global packing scale.
+- Combine logs report skipped disabled renderers and the normalized chart-density range in addition to chart count/global packing scale.
 
 ### Validation context
 
 - Real-scene testing is currently on Unity 6.3 LTS `6000.3.6f1`.
-- The supplied `HF_ModularReference.fbx` contains authored `LightmapUV` data on all 14 mesh geometries, so importer-side **Generate Lightmap UVs** is not required for that asset.
-- The reference FBX showed that differently sized wall modules use very different authored UV2 area per square unit of geometry. For example, the 0.75 m and 3.0 m wall modules both occupy a large portion of 0..1 UV space even though the larger wall has several times more surface area. A single unweighted UV scale therefore cannot maintain constant texel density after combining.
+- The supplied `HF_ModularReference.fbx` contains authored `LightmapUV` data on all mesh geometries, so importer-side **Generate Lightmap UVs** is not required for that asset.
 
 ## [2.1.2] - 2026-08-08
 
@@ -38,60 +51,42 @@ All notable changes to this fork are documented in this file.
 - Replaced the first whole-source-mesh UV2 repacker with a **chart-level repacker**.
 - All existing source UV2 charts now use one global scale, preserving relative texel density across adjacent modular pieces instead of scaling every source mesh independently.
 - Existing chart topology is preserved; the repack path does not run `GenerateSecondaryUVSet` and does not intentionally create new vertices.
-- Chart padding is now explicit in texels instead of being an arbitrary normalized per-mesh border.
-- Preserve & Repack no longer uses `CombineInstance.lightmapScaleOffset` / `hasLightmapData`, avoiding the unexpected extra lightmap UV channel seen in the Unity 6 real-scene test.
+- Chart padding is explicit in texels instead of being an arbitrary normalized per-mesh border.
+- Preserve & Repack no longer uses `CombineInstance.lightmapScaleOffset` / `hasLightmapData`.
 
 ### Added
 
 - `Chart Padding (texels)` setting, default `2`.
 - `Padding Reference Size` setting, default `512`.
-- Combine log now reports chart count and the global UV packing scale.
-
-### Notes
-
-- Real-scene 2.1.0 testing showed a visible lightmap seam exactly at a modular wall boundary and a change in lightmap texel visualization density across that boundary. The independent per-source scaling in 2.1.0 was the cause addressed by this revision.
+- Combine log reports chart count and the global UV packing scale.
 
 ## [2.1.0] - 2026-08-08
 
 ### Added
 
 - Added **Lightmap UV Mode** with `None`, `Preserve Source UV2`, `Preserve And Repack Source UV2`, and `Regenerate UV2` modes.
-- Added the first source-UV2 preservation/repack experiment for modular static geometry.
 
 ### Changed
 
 - Regenerate UV2 no longer forces UInt32 unconditionally. Index format selection uses the source index-count upper bound, so small meshes can stay UInt16.
 
-### Known issue
-
-- The first repack implementation scaled each source mesh independently into an equal atlas cell. This could change texel density between adjacent modules and shrink internal chart margins. Fixed in 2.1.1.
-
 ## [2.0.2] - 2026-08-08
 
 ### Fixed
 
-- **Restore / Undo Combine** now restores the exact pre-combine active/enabled state instead of enabling every inactive descendant and every disabled child MeshRenderer.
+- **Restore / Undo Combine** restores the exact pre-combine active/enabled state instead of enabling every inactive descendant and every disabled child MeshRenderer.
 - The Editor captures the state of child MeshFilter GameObjects and MeshRenderers before combine and keeps the restore snapshot in Unity `SessionState` for the current Editor session.
-- This prevents previously inactive helper/variant geometry from becoming active after Restore and then being accidentally included in the next combine pass.
-
-### Changed
-
-- Combine is disabled while an exact restore snapshot is pending, forcing a clean `Combine -> Restore -> Combine` comparison loop.
-- Existing combined meshes created before 2.0.2 show a warning because they do not have an exact restore snapshot.
 
 ## [2.0.1] - 2026-08-08
 
 ### Added
 
 - Added **Restore / Undo Combine** for fast iteration in the Editor.
-- Restore clears the destination combined Mesh and materials, clears the generated MeshCollider reference, reactivates child GameObjects, and re-enables child MeshRenderers.
-- Unsaved transient combined Mesh objects are removed through the Unity Undo system; saved `.asset` meshes are kept.
 
 ### Changed
 
-- Read/Write validation is now aggregated into one message instead of logging one warning for every source mesh.
-- Edit Mode non-readable meshes are reported as informational because Editor combining can still use them; runtime combining still fails with one aggregated error.
-- Missing Mesh and MeshRenderer validation messages are aggregated as well.
+- Read/Write validation is aggregated into one message instead of logging one warning for every source mesh.
+- Edit Mode non-readable meshes are informational because Editor combining can still use them; runtime combining still fails with one aggregated error.
 
 ## [2.0.0] - 2026-08-08
 
