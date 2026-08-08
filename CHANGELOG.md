@@ -2,6 +2,24 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.3.0] - 2026-08-08
+
+### Added
+
+- Added optional **Remove Exact Opposing Faces** geometry cleanup.
+- Exact cleanup matches triangle pairs by the same three destination-local positions within a configurable tolerance and requires opposite face direction.
+- Matching pairs are removed from the combined submesh index buffers before optional `Regenerate UV2` runs.
+- Added **Position Tolerance** with a default of `0.0001` Unity units.
+- Combine logs report removed face-pair and triangle counts.
+
+### Safety / behavior
+
+- Exact opposing-face cleanup is off by default because intentionally double-sided geometry can also contain coincident opposite-wound triangles.
+- Cleanup removes triangle indices only. It does not weld or compact vertices and does not rewrite normals, tangents, UVs, colors, skinning data, or other vertex attributes.
+- Multi-material output is supported; matching opposing triangles can be removed even when they belong to different submeshes/materials.
+- Non-triangle submeshes are left untouched.
+- This is not a Boolean union and does not remove partial coplanar overlaps or coincident surfaces that use different triangulation.
+
 ## [2.2.2] - 2026-08-08
 
 ### Fixed
@@ -22,13 +40,9 @@ All notable changes to this fork are documented in this file.
 
 - Added automatic filtering for nested exact-duplicate source geometry.
 - A deeper child is skipped when it references the same shared Mesh and has the same world transform as an ancestor below the combiner root.
-- This addresses the real test case where 119 selected wall objects produced 238 source meshes because every wall also contained a nested bake/helper proxy.
+- This addresses a validation case where each visible modular object also contained a nested bake/helper proxy.
 - Duplicate filtering does not depend on project-specific names.
 - Combine logs report the skipped nested duplicate count.
-
-### Validation note
-
-- In the 2.2.0 test, UV Overlap was essentially clean while Texel Validity showed invalid texels exactly along modular boundaries and visible baked seams aligned with those boundaries. Duplicate geometry must be eliminated before topology welding/unwrap is evaluated.
 
 ## [2.2.0] - 2026-08-08
 
@@ -64,5 +78,5 @@ All notable changes to this fork are documented in this file.
 ### Known limitations
 
 - No topology welding or Boolean union.
-- Internal coincident faces are not removed yet.
+- Partial coplanar overlaps and differently triangulated coincident surfaces are not removed.
 - Runtime combining requires CPU-readable source meshes.
