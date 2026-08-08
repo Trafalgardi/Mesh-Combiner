@@ -49,7 +49,7 @@ Unity pins the resolved Git commit in `Packages/packages-lock.json`. If Package 
 
 Package ID: `com.trafalgardi.mesh-combiner`
 
-Current version: **2.1.1**
+Current version: **2.1.2**
 
 ## Main features
 
