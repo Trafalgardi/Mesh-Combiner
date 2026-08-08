@@ -17,7 +17,7 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
     private static void Open()
     {
         MeshCoplanarLightmapUvWindow window = GetWindow<MeshCoplanarLightmapUvWindow>(true, "Coplanar Stitched UV2");
-        window.minSize = new Vector2(430f, 360f);
+        window.minSize = new Vector2(450f, 390f);
         window._target = Selection.activeGameObject;
         window.Show();
     }
@@ -32,18 +32,34 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
     {
         EditorGUILayout.LabelField("Coplanar Stitched Lightmap UV2", EditorStyles.boldLabel);
         EditorGUILayout.HelpBox(
-            "Experimental seam diagnostic/generator. It groups triangles that share the same geometric edge and are coplanar, then planar-projects each connected surface into one continuous UV2 chart. Geometry, UV0, normals, tangents and materials are not changed.",
+            "Experimental seam diagnostic/generator. It groups coplanar triangles through exact shared geometric edges and through collinear partially-overlapping boundary edges (T-junctions), then planar-projects each connected surface into one continuous UV2 chart. Geometry, UV0, normals, tangents and materials are not changed.",
             MessageType.Info);
 
         _target = (GameObject)EditorGUILayout.ObjectField("Target", _target, typeof(GameObject), true);
-        _positionTolerance = Mathf.Max(0.000001f, EditorGUILayout.FloatField(
-            new GUIContent("Edge Position Tolerance", "World-space tolerance used to decide whether two triangle edge endpoints are the same."),
-            _positionTolerance));
-        _coplanarAngleDegrees = Mathf.Clamp(EditorGUILayout.Slider(
-            new GUIContent("Coplanar Angle", "Maximum normal-angle difference for triangles connected through the same geometric edge."),
-            _coplanarAngleDegrees, 0.01f, 10f), 0.01f, 10f);
+        _positionTolerance = Mathf.Max(
+            0.000001f,
+            EditorGUILayout.FloatField(
+                new GUIContent(
+                    "Edge Position Tolerance",
+                    "World-space tolerance used for exact endpoints and for deciding whether partially overlapping boundary edges lie on the same line."),
+                _positionTolerance));
+
+        _coplanarAngleDegrees = Mathf.Clamp(
+            EditorGUILayout.Slider(
+                new GUIContent(
+                    "Coplanar Angle",
+                    "Maximum normal-angle difference for triangles stitched into one coplanar chart. Partial edge direction matching is additionally capped at 1 degree for safety."),
+                _coplanarAngleDegrees,
+                0.01f,
+                10f),
+            0.01f,
+            10f);
+
         _paddingTexels = EditorGUILayout.IntSlider(
-            new GUIContent("Chart Padding (texels)"), _paddingTexels, 0, 16);
+            new GUIContent("Chart Padding (texels)"),
+            _paddingTexels,
+            0,
+            16);
 
         int[] resolutions = { 256, 512, 1024, 2048, 4096 };
         string[] resolutionLabels = { "256", "512", "1024", "2048", "4096" };
@@ -53,6 +69,9 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
         _paddingReferenceResolution = resolutions[Mathf.Clamp(resolutionIndex, 0, resolutions.Length - 1)];
 
         EditorGUILayout.Space();
+        EditorGUILayout.HelpBox(
+            "T-junction support is generic: a long boundary edge can stitch to one or more shorter collinear edges when they physically overlap and their triangles are coplanar. This is useful for modular walls where window/door openings subdivide one side of a module boundary.",
+            MessageType.Info);
         EditorGUILayout.HelpBox(
             "Safety: if one vertex index is shared by multiple hard-angle generated charts, generation aborts instead of silently corrupting UV2. The current test mode requires triangle topology.",
             MessageType.Warning);
@@ -69,7 +88,9 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
 
         if (!canGenerate)
         {
-            EditorGUILayout.HelpBox("Select the combined GameObject that owns the output MeshFilter.", MessageType.Info);
+            EditorGUILayout.HelpBox(
+                "Select the combined GameObject that owns the output MeshFilter.",
+                MessageType.Info);
         }
 
         if (!string.IsNullOrEmpty(_lastResult))
@@ -81,7 +102,9 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
 
     private void Generate()
     {
-        if (_target == null || !_target.TryGetComponent(out MeshFilter meshFilter) || meshFilter.sharedMesh == null)
+        if (_target == null ||
+            !_target.TryGetComponent(out MeshFilter meshFilter) ||
+            meshFilter.sharedMesh == null)
         {
             _lastResult = "Target has no MeshFilter/shared mesh.";
             _lastResultType = MessageType.Error;
@@ -105,7 +128,9 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
             DestroyImmediate(workingMesh);
             _lastResult = error;
             _lastResultType = MessageType.Error;
-            Debug.LogError("Mesh Combiner: Coplanar Stitched UV2 failed for \"" + _target.name + "\": " + error, _target);
+            Debug.LogError(
+                "Mesh Combiner: Coplanar Stitched UV2 failed for \"" + _target.name + "\": " + error,
+                _target);
             return;
         }
 
@@ -128,7 +153,8 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
             EditorUtility.SetDirty(meshRenderer);
         }
 
-        StaticEditorFlags staticFlags = GameObjectUtility.GetStaticEditorFlags(_target) | StaticEditorFlags.ContributeGI;
+        StaticEditorFlags staticFlags =
+            GameObjectUtility.GetStaticEditorFlags(_target) | StaticEditorFlags.ContributeGI;
         GameObjectUtility.SetStaticEditorFlags(_target, staticFlags);
         EditorUtility.SetDirty(_target);
 
@@ -137,16 +163,25 @@ public class MeshCoplanarLightmapUvWindow : EditorWindow
 
         _lastResult =
             "Generated " + result.chartCount + " coplanar UV2 charts from " + result.triangleCount +
-            " triangles; stitched " + result.stitchedEdgeConnections + " shared-edge connections; assigned " +
-            result.assignedVertexCount + " vertices; packing scale " + result.packingScale.ToString("0.###") +
+            " triangles. Stitched " + result.exactEdgeConnections + " exact shared-edge connections + " +
+            result.partialCollinearEdgeConnections + " partial/T-junction connections = " +
+            result.stitchedEdgeConnections + " total. Boundary edges inspected: " + result.boundaryEdgeCount +
+            ". Assigned " + result.assignedVertexCount + " vertices; packing scale " +
+            result.packingScale.ToString("0.###") +
             ". Geometry and render attributes were not modified.";
         _lastResultType = MessageType.Info;
 
-        Debug.Log("<color=#00cc00><b>Mesh Combiner: Coplanar Stitched UV2 generated for \"" + _target.name +
-                  "\": " + result.chartCount + " charts, " + result.stitchedEdgeConnections +
-                  " stitched edge connections, " + result.assignedVertexCount + " assigned vertices, packing scale " +
-                  result.packingScale.ToString("0.###") + ", tolerance " + result.positionTolerance.ToString("0.######") +
-                  ", coplanar angle " + result.coplanarAngleDegrees.ToString("0.###") + " deg.</b></color>", _target);
+        Debug.Log(
+            "<color=#00cc00><b>Mesh Combiner: Coplanar Stitched UV2 generated for \"" + _target.name +
+            "\": " + result.chartCount + " charts, " + result.exactEdgeConnections +
+            " exact edge connections + " + result.partialCollinearEdgeConnections +
+            " partial/T-junction connections = " + result.stitchedEdgeConnections +
+            " total, " + result.boundaryEdgeCount + " boundary edges inspected, " +
+            result.assignedVertexCount + " assigned vertices, packing scale " +
+            result.packingScale.ToString("0.###") + ", tolerance " +
+            result.positionTolerance.ToString("0.######") + ", coplanar angle " +
+            result.coplanarAngleDegrees.ToString("0.###") + " deg.</b></color>",
+            _target);
 
         SceneView.RepaintAll();
     }
