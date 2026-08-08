@@ -2,27 +2,40 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.1.1] - 2026-08-08
+
+### Fixed
+
+- Replaced the first whole-source-mesh UV2 repacker with a **chart-level repacker**.
+- All existing source UV2 charts now use one global scale, preserving relative texel density across adjacent modular pieces instead of scaling every source mesh independently.
+- Existing chart topology is preserved; the repack path does not run `GenerateSecondaryUVSet` and does not intentionally create new vertices.
+- Chart padding is now explicit in texels instead of being an arbitrary normalized per-mesh border.
+- Preserve & Repack no longer uses `CombineInstance.lightmapScaleOffset` / `hasLightmapData`, avoiding the unexpected extra lightmap UV channel seen in the Unity 6 real-scene test.
+
+### Added
+
+- `Chart Padding (texels)` setting, default `2`.
+- `Padding Reference Size` setting, default `512`.
+- Combine log now reports chart count and the global UV packing scale.
+
+### Notes
+
+- Real-scene 2.1.0 testing showed a visible lightmap seam exactly at a modular wall boundary and a change in lightmap texel visualization density across that boundary. The independent per-source scaling in 2.1.0 was the cause addressed by this revision.
+
 ## [2.1.0] - 2026-08-08
 
 ### Added
 
-- Added **Lightmap UV Mode** with four explicit modes: None, Preserve Source UV2, Preserve & Repack Source UV2, and Regenerate UV2.
-- Added **Preserve & Repack Source UV2**, intended for modular static geometry that already has valid lightmap UV charts.
-- Preserve & Repack keeps each source mesh's existing UV2 charts and scales/offsets them into non-overlapping cells in one combined 0..1 atlas.
-- Added configurable normalized repack padding; the default is `0.002` (about one pixel at a 512px lightmap).
-- Preserve & Repack validates that every source mesh has a non-degenerate UV2 channel and fails with one aggregated error if it does not.
+- Added **Lightmap UV Mode** with `None`, `Preserve Source UV2`, `Preserve And Repack Source UV2`, and `Regenerate UV2` modes.
+- Added the first source-UV2 preservation/repack experiment for modular static geometry.
 
 ### Changed
 
-- `Regenerate UV2` no longer forces a 32-bit index buffer just because regeneration is enabled.
-- Index format is selected from an upper bound derived from source index counts. Small combined meshes now remain UInt16 even when UV2 regeneration splits vertices.
-- Combine logs now report triangle count and the selected lightmap UV strategy; regenerated UV2 reports how many vertices were added by chart splits.
-- `RestoreCombinedState` no longer enables every inactive descendant. Exact source-state restoration stays in the Editor button, which has the pre-combine snapshot.
+- Regenerate UV2 no longer forces UInt32 unconditionally. Index format selection uses the source index-count upper bound, so small meshes can stay UInt16.
 
-### Why
+### Known issue
 
-- Real Unity 6 testing on the modular wall scene showed `GenerateSecondaryUVSet` increasing the combined wall mesh from 10,616 to 14,940 vertices (+40.7%) while triangle count stayed at 5,320.
-- The regenerated UV layout also produced visible baked seams, so preserving the source charts and repacking them is now the preferred test path.
+- The first repack implementation scaled each source mesh independently into an equal atlas cell. This could change texel density between adjacent modules and shrink internal chart margins. Fixed in 2.1.1.
 
 ## [2.0.2] - 2026-08-08
 
