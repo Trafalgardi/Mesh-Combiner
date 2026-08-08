@@ -2,6 +2,27 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.5.0] - 2026-08-09
+
+### Added
+
+- Promoted **Coplanar Stitched UV2** from the separate experimental workflow into the main `Lightmap UV Mode` enum.
+- `Combine Meshes` can now generate stitched coplanar UV2 in the same operation; the normal workflow no longer requires a second Tools-menu pass.
+- The integrated mode uses the production-validated defaults: `0.0001` world-space edge tolerance and `1 degree` coplanar angle.
+- Added Inspector UI for Coplanar Stitched UV2 padding and reference resolution.
+- The advanced `Tools -> Mesh Combiner -> Coplanar Stitched UV2...` window remains available for manual retesting and non-default tolerance/angle tuning.
+
+### Validation
+
+- Production-scene testing reached `463` coplanar charts with `1969` exact edge connections and `228` partial/T-junction connections from `5308` seam-candidate edge records.
+- Ordinary modular wall seams and seams adjacent to window/door openings were visually removed in the final baked result.
+- Some Unity `UV Overlap` / `Texel Validity` debug markings can remain on disconnected stitched boundaries even when the final bake is clean; the README documents this diagnostic caveat.
+
+### Behavior
+
+- Coplanar stitching modifies UV2 only. Positions, triangle indices, UV0, normals, tangents and materials remain unchanged.
+- Source duplicate filtering, restore/recovery, multi-material output, MeshCollider output and geometry cleanup remain compatible with the integrated mode.
+
 ## [2.4.2] - 2026-08-09
 
 ### Fixed
@@ -10,13 +31,13 @@ All notable changes to this fork are documented in this file.
 - Version 2.4.1 incorrectly treated only single-owner edges as boundary candidates. Closed wall modules normally have two owners at a visible perimeter edge (for example front face + side/end face), so the partial-edge pass could inspect zero candidates even when T-junction seams existed.
 - The stitcher now skips only ordinary two-owner coplanar triangulation edges and keeps open, hard, non-manifold, and multi-owner edge records as generic seam candidates.
 - Partial/T-junction matching can therefore inspect differently segmented closed-module seams around windows, doors, arches, cutouts, and similar geometry.
-- Diagnostics now describe the count as **seam-candidate edge records inspected** rather than implying that all candidates are open mesh boundaries.
+- Diagnostics describe the count as **seam-candidate edge records inspected** rather than implying that all candidates are open mesh boundaries.
 
 ### Safety / behavior
 
 - No project-specific names or asset assumptions are used.
 - Partial matching still requires coplanar owning triangles, collinear edge lines within tolerance, non-zero segment overlap, and a maximum 1-degree edge-direction difference.
-- Geometry, UV0, normals, tangents, materials, and triangle indices remain unchanged; only UV2 is rewritten by the experimental stitcher.
+- Geometry, UV0, normals, tangents, materials, and triangle indices remain unchanged; only UV2 is rewritten.
 
 ## [2.4.1] - 2026-08-08
 
