@@ -45,9 +45,14 @@ internal static class MeshCombinerEditorState
         bool hasSnapshot = HasRestoreSnapshot(combiner);
         bool markedCombined = IsMarkedCombined(combiner);
 
-        // Backward-compatible: a snapshot plus output is sufficient evidence that this tool produced the output.
-        if (hasOutput && (markedCombined || hasSnapshot)) return MeshCombinerWorkflowState.Combined;
-        if (markedCombined && hasOutput) return MeshCombinerWorkflowState.OutputWithoutSnapshot;
+        if (hasOutput && hasSnapshot)
+        {
+            // Backward-compatible migration: older dev builds already had the snapshot but not the explicit marker.
+            MarkCombined(combiner);
+            return MeshCombinerWorkflowState.Combined;
+        }
+
+        if (hasOutput && markedCombined) return MeshCombinerWorkflowState.OutputWithoutSnapshot;
         if (hasSnapshot && !hasOutput) return MeshCombinerWorkflowState.InterruptedRecoverable;
 
         // A pre-existing Mesh on the root is not automatically considered combined output.
