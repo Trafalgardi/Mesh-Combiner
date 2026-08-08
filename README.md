@@ -49,7 +49,7 @@ Unity pins the resolved Git commit in `Packages/packages-lock.json`. If Package 
 
 Package ID: `com.trafalgardi.mesh-combiner`
 
-Current version: **2.1.2**
+Current version: **2.2.0**
 
 ## Main features
 
@@ -57,6 +57,7 @@ Current version: **2.1.2**
 - single-material and multi-material/submesh preservation;
 - automatic UInt16/UInt32 index selection;
 - optional combined `MeshCollider`;
+- disabled child `MeshRenderer`s are skipped, preventing hidden bake proxies/helpers from being duplicated into output geometry;
 - aggregated validation logs;
 - `Contribute GI`, `Receive GI = Lightmaps`, and seam-stitch setup for lightmapped output;
 - exact-state **Restore / Undo Combine** workflow in the Editor;
@@ -83,30 +84,38 @@ This is mainly diagnostic. Modular meshes commonly reuse the same 0..1 UV2 range
 
 **Recommended test mode for modular static geometry that already has valid UV2.**
 
-Version 2.1.1 detects the existing UV2 charts in every source mesh and packs all charts into one final 0..1 UV2 atlas.
+Version 2.2.0 keeps the authored source UV2 chart topology, but does not trust the normalized size of each source asset's UV layout as its final texel density.
 
-Important properties of this mode:
+The repacker now:
 
-- it keeps the existing chart topology;
-- it does not call `GenerateSecondaryUVSet`;
-- it does not intentionally split vertices;
-- all charts use **one global scale**, so adjacent modular pieces keep their relative lightmap texel density;
-- every chart gets an explicit padding border;
-- temporary UV2-modified mesh copies are used during combine, so source assets are not modified.
+- detects authored UV2 islands through shared UV edges, so hard-normal vertex splits do not unnecessarily create extra packing charts;
+- calculates the world-space surface area and UV area of every chart;
+- applies a relative linear scale based on `sqrt(world surface area / source UV area)`;
+- includes the source renderer's **Scale In Lightmap** in Edit Mode;
+- then packs all corrected charts into one 0..1 UV2 atlas with a final global packing scale;
+- preserves authored chart topology and does not call `GenerateSecondaryUVSet`;
+- does not intentionally create new vertices;
+- uses temporary UV2-modified mesh copies, so source assets are never modified.
 
-The first 2.1.0 repack experiment packed whole source meshes into equal cells and scaled each source independently. Real-scene testing showed that this changed texel density exactly at modular boundaries and produced visible baked seams. 2.1.1 replaces that approach with chart-level packing.
+This matters for modular asset packs where every separate model has an authored lightmap UV layout that nearly fills 0..1. A 0.75 m wall and a 3 m wall can therefore have similarly sized source UV charts even though the larger wall needs substantially more lightmap pixels. A single unweighted UV scale cannot preserve consistent texel density after those models become one MeshRenderer.
+
+### Disabled renderers / bake proxies
+
+MeshFilters whose sibling `MeshRenderer.enabled` is false are not combined.
+
+This is intentional: a disabled proxy/helper renderer is not part of the visible source result and including it can duplicate coplanar geometry inside the generated mesh. The combine log reports how many disabled renderers were skipped.
 
 #### Chart Padding (texels)
 
 Default: `2`.
 
-Reserves a border around every UV2 chart. If **UV Overlap** visualization still shows red chart neighborhoods, increase this value.
+Reserves a border around every UV2 chart. Unity's lightmap filtering/dilation requires spacing between charts to avoid bleeding.
 
 #### Padding Reference Size
 
 Default: `512`.
 
-Padding is converted to normalized UV space using this reference resolution. A 2-texel padding at a 512 reference size is intentionally conservative when the final scene lightmap is 1024.
+Padding is converted to normalized UV space using this reference resolution. A 2-texel padding at a 512 reference size is a conservative starting point for a 1024 scene lightmap.
 
 ### Regenerate UV2
 
@@ -124,10 +133,11 @@ Use this as a fallback when source meshes do not have usable lightmap UVs.
 4. Start with **Lightmap UV Mode = Preserve And Repack Source UV2**.
 5. Keep **Chart Padding = 2** and **Padding Reference Size = 512** for the first test.
 6. Click **Combine Meshes**.
-7. Check mesh vertex/triangle count.
-8. Check Scene View **UV Overlap** and **Texel Validity**.
-9. Bake lighting.
-10. Use **Restore / Undo Combine** before another A/B comparison.
+7. Read the combine log: source count, skipped disabled renderers, chart count, global packing scale, and density range are useful diagnostics.
+8. Check mesh vertex/triangle count.
+9. Check Scene View **UV Overlap**, **Texel Validity**, and **Baked Lightmap** visualization.
+10. Bake lighting.
+11. Use **Restore / Undo Combine** before another A/B comparison.
 
 ## Restore / Undo Combine
 
