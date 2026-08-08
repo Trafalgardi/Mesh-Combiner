@@ -67,7 +67,7 @@ If Unity still shows stale package contents, remove the package and add the same
 
 Package name: `com.trafalgardi.mesh-combiner`
 
-Current package version: `2.0.1`
+Current package version: `2.0.2`
 
 ## Unity 6 modernization
 
@@ -84,7 +84,7 @@ The Unity 6 version adds:
 - automatic `Contribute GI`, `Receive GI = Lightmaps`, and lightmap seam stitching when UV2 generation is enabled;
 - optional `Update/Create MeshCollider` support;
 - Editor Undo support;
-- a **Restore / Undo Combine** button for fast Combine -> Bake -> Restore iteration;
+- an exact-state **Restore / Undo Combine** button for fast comparison tests;
 - safer asset saving with unique generated mesh paths;
 - source objects are deactivated by default instead of destroyed.
 
@@ -92,17 +92,24 @@ The Unity 6 version adds:
 
 Use **Restore / Undo Combine** in the `MeshCombiner` inspector to return to the source hierarchy after testing a combined mesh.
 
+Starting with `2.0.2`, the Editor captures the active state of child MeshFilter GameObjects and the enabled state of their MeshRenderers immediately before combine. The snapshot is kept in Unity `SessionState` for the current Editor session.
+
 The restore action:
 
 - clears the destination `MeshFilter.sharedMesh`;
 - clears the destination renderer materials;
 - clears the combined `MeshCollider` mesh reference when it points to the combined mesh;
-- reactivates inactive child GameObjects;
-- re-enables disabled child `MeshRenderer` components;
+- restores child MeshFilter GameObjects to their exact pre-combine active state;
+- restores child MeshRenderers to their exact pre-combine enabled state;
+- leaves objects/renderers that were already inactive before combine inactive;
 - deletes an unsaved transient generated Mesh through Unity Undo;
 - keeps a generated Mesh that was already saved as a `.asset` in the Project.
 
-This restore command cannot reconstruct child objects after **Destroy Combined Children** was used. Keep destructive mode disabled for normal iteration.
+This is important for modular assets that contain disabled variants/helper meshes: restoring must not accidentally activate those meshes and include them in the next combine pass.
+
+The exact Editor restore snapshot is session-scoped. A combined mesh created before `2.0.2`, or one left combined across an Editor restart, cannot be restored exactly from that snapshot; use Unity Undo or reset/reopen the source hierarchy first.
+
+**Destroy Combined Children** is destructive and does not support exact restore. Keep it disabled for normal iteration.
 
 ## Missing collider issue
 
@@ -123,11 +130,13 @@ Recommended workflow for static scene geometry:
 5. Click **Combine Meshes**.
 6. Save the generated combined mesh asset if the result is useful.
 7. Bake lighting.
-8. Use **Restore / Undo Combine** to return to the source hierarchy for the next comparison.
+8. Use **Restore / Undo Combine** to return to the exact pre-combine source state for the next comparison.
 
 When **Generate Lightmap UV2** is enabled in Edit Mode, the destination object is also marked `Contribute GI`, its renderer is set to receive GI from lightmaps, and lightmap seam stitching is enabled.
 
 Unity's UV unwrapper can create additional vertices while splitting UV charts. The fork switches the generated mesh to a 32-bit index buffer before unwrapping to prevent UV2 generation from failing at the 16-bit vertex limit.
+
+The current generated-UV2 strategy is still under real-scene validation. For modular interiors, compare the generated combined UV2 against the source meshes because charting/packing can change baked seams and lightmap memory use.
 
 ## Runtime combining
 
@@ -159,11 +168,7 @@ combiner.UpdateOrCreateMeshCollider = true;
 combiner.CombineMeshes(true);
 ```
 
-To restore the source hierarchy from code:
-
-```csharp
-combiner.RestoreCombinedState(true);
-```
+The exact-state Restore snapshot is an Editor inspector workflow and is intentionally not exposed as a runtime API.
 
 ## Original project
 
