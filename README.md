@@ -26,7 +26,7 @@ Package ID:
 com.trafalgardi.mesh-combiner
 ```
 
-Current package version: **2.4.1**
+Current package version: **2.4.2**
 
 ## Requirements
 
@@ -59,7 +59,7 @@ By default the source hierarchy is deactivated rather than destroyed so the oper
 - generic nested exact-duplicate helper/proxy filtering;
 - multiple lightmap UV2 modes;
 - experimental coplanar stitched UV2 generation;
-- T-junction / partial-edge-aware coplanar stitching;
+- closed-mesh T-junction / partial-edge-aware coplanar stitching;
 - optional exact opposing-face cleanup;
 - automatic baked-GI setup;
 - Editor Undo support;
@@ -83,12 +83,7 @@ It automatically skips:
 
 ### Nested exact-duplicate filtering
 
-A deeper child is skipped when an ancestor below the combiner root:
-
-- references the same `sharedMesh`;
-- has effectively the same world transform.
-
-This is intended for helper/bake-proxy hierarchies and does not depend on object names.
+A deeper child is skipped when an ancestor below the combiner root references the same `sharedMesh` and has effectively the same world transform. This is useful for helper/bake-proxy hierarchies and does not depend on object names.
 
 ## Read/Write
 
@@ -122,24 +117,13 @@ Copies source UV2 unchanged. This is mainly diagnostic: independently authored m
 
 ### Preserve And Repack Source UV2
 
-Reuses authored UV2 charts and repacks them into one non-overlapping atlas.
-
-The repacker:
-
-1. finds existing UV2 charts;
-2. measures world-space surface area and source UV area;
-3. accounts for source **Scale In Lightmap** in Edit Mode;
-4. derives relative world-space texel density;
-5. packs charts with configurable texel padding;
-6. preserves source chart topology.
+Reuses authored UV2 charts and repacks them into one non-overlapping atlas. Relative chart size is based on world-space surface area and source UV area, with source **Scale In Lightmap** taken into account in Edit Mode.
 
 Different charts may show different checker phase/offset in Unity's Baked Lightmap visualization. Matching checker **size/density** is the important part.
 
 ### Regenerate UV2
 
-Combines first and then calls Unity's secondary UV unwrapper.
-
-This is useful when source UV2 is unusable, but Unity can split vertices and move baked seams while generating new charts.
+Combines first and then calls Unity's secondary UV unwrapper. This is useful when source UV2 is unusable, but Unity can split vertices and move baked seams while generating new charts.
 
 ## Experimental: Coplanar Stitched UV2
 
@@ -149,13 +133,13 @@ Open:
 Tools -> Mesh Combiner -> Coplanar Stitched UV2...
 ```
 
-This tool operates on an already combined mesh. It exists to remove baked seams caused by modular pieces that form one visually continuous planar surface but still have disconnected lightmap charts.
+This tool operates on an already combined mesh. It targets baked seams caused by modular pieces that form one visually continuous planar surface but still have disconnected lightmap charts.
 
 The tool:
 
 - reads triangle geometry in world space;
-- joins triangles whose geometric edges are identical and whose normals are coplanar;
-- also joins **collinear partially-overlapping boundary edges**;
+- joins triangles across exact matching geometric edges when their normals are coplanar;
+- also joins collinear partially-overlapping seam edges;
 - supports T-junctions where one long edge touches one or more shorter edges;
 - builds connected coplanar surfaces;
 - planar-projects each surface into one continuous UV2 chart;
@@ -163,47 +147,72 @@ The tool:
 - writes only UV2;
 - does not modify positions, triangles, UV0, normals, tangents, or materials;
 - clones the current mesh before writing UV2;
-- aborts rather than silently corrupting UV2 when a single vertex index is shared by incompatible hard-angle charts.
+- aborts rather than silently corrupting UV2 when one vertex index is shared by incompatible hard-angle charts.
 
-### Why partial-edge/T-junction stitching exists
+### Closed meshes and seam candidates
 
-Modular walls with doors, windows, arches, cutouts, or other openings often subdivide a module boundary differently on each side.
+A visible modular boundary is not necessarily an **open mesh boundary**.
 
-For example:
+For a closed wall module, the front-face perimeter edge is normally shared by two triangles from different surfaces, for example:
 
 ```text
-neighbor module edge
+front face
+    |
+    | shared geometric edge
+    |
+side/end face
+```
+
+So `owners.Count == 1` is not a valid generic test for modular seams.
+
+Since **2.4.2**, the stitcher classifies seam candidates as follows:
+
+- an edge with one owner is a candidate;
+- an edge with exactly two coplanar owners is treated as an ordinary interior triangulation edge and skipped;
+- hard edges with different owner normals are candidates;
+- non-manifold / multi-owner edge groups are candidates.
+
+Partial/T-junction matching then compares compatible coplanar candidate records and stitches only segments that are collinear and overlap in world space.
+
+This keeps the logic generic for closed modular walls, architecture, props, cutouts, doors, windows, arches, and other segmented meshes without relying on object names.
+
+### Why T-junction stitching exists
+
+Two flush modules can describe the same geometric boundary with different segmentation:
+
+```text
+neighbor edge
 |-------------------------|
 
-opening module edge
+cutout/opening module
 |--------|-----|----------|
 ```
 
-The surfaces are physically flush, but there is no identical endpoint-to-endpoint edge pair. Version 2.4.1 detects overlapping collinear portions of those boundary edges and can stitch their coplanar triangles into the same lightmap chart.
+The surface is continuous, but there is no identical endpoint-to-endpoint edge pair. The partial matcher allows the long edge to connect to the shorter collinear segments.
 
 Matching is conservative:
 
-- triangle normals must pass **Coplanar Angle**;
-- edge lines must be collinear within **Edge Position Tolerance**;
-- the two segments must overlap by a non-zero length;
-- partial-edge direction matching is capped to a 1-degree line-angle tolerance even if Coplanar Angle is configured higher.
+- owning triangle normals must pass **Coplanar Angle**;
+- edge lines must coincide within **Edge Position Tolerance**;
+- the segments must overlap by a non-zero length;
+- partial-edge direction matching is capped at 1 degree even if Coplanar Angle is higher.
 
-The result log reports separately:
+The result log reports:
 
 - exact shared-edge connections;
 - partial/T-junction connections;
 - total stitched connections;
-- boundary edges inspected;
+- seam-candidate edge records inspected;
 - resulting chart count;
 - packing scale.
 
-This feature is currently experimental and remains separate from the normal `Lightmap UV Mode` enum until it is validated across more production scenes.
+This feature remains experimental and separate from the normal `Lightmap UV Mode` enum until it has wider production validation.
 
-### Debug-view note for stitched disconnected geometry
+### Debug-view note
 
-The stitcher deliberately does **not** weld render vertices. Two modules can therefore remain topologically disconnected while receiving identical UV2 coordinates along the shared geometric boundary.
+The stitcher deliberately does **not** weld render vertices. Two modules can remain topologically disconnected while receiving continuous UV2 coordinates along a geometric seam.
 
-Unity's **UV Overlap** or **Texel Validity** debug views can flag some of those stitched boundary texels, especially around complex cutouts/jambs, even when the actual baked surface is improved. Treat those debug modes as diagnostics, not the sole pass/fail criterion for this experimental mode. Always compare the final baked result and verify that no real chart area is double-covered away from the stitched boundary.
+Unity's **UV Overlap** or **Texel Validity** debug views can therefore flag boundary texels around complex cutouts/jambs even when the final baked surface improves. Use the final baked result together with the debug views; do not use one debug mode as the sole pass/fail criterion.
 
 ## Unity lightmap diagnostics
 
@@ -221,12 +230,7 @@ A clean UV Overlap and Texel Validity view does not by itself guarantee seamless
 
 Optional and disabled by default.
 
-It removes pairs of coincident triangles when:
-
-- the same three destination-local positions match within **Position Tolerance**;
-- the faces point in opposite directions.
-
-This can remove exact back-to-back internal faces between modular pieces.
+It removes pairs of coincident triangles when the same three destination-local positions match within **Position Tolerance** and the faces point in opposite directions.
 
 The cleanup only changes triangle index buffers. It does not weld vertices or rewrite normals, tangents, UVs, colors, or other vertex attributes.
 
@@ -245,26 +249,13 @@ A zero removal count can therefore be correct even when two closed modules appea
 
 ### Restore Exact State
 
-Before Combine, the Editor stores source `activeSelf` and `MeshRenderer.enabled` state.
-
-The snapshot:
-
-- is written before hierarchy mutation;
-- stores stable Unity `GlobalObjectId` references;
-- survives domain reloads and Editor restarts/crashes when the scene objects still exist.
+Before Combine, the Editor stores source `activeSelf` and `MeshRenderer.enabled` state using stable Unity `GlobalObjectId` references. The snapshot is persisted before hierarchy mutation and survives domain reloads / Editor restarts when the scene objects still exist.
 
 Restore Exact State clears combined output and restores the recorded source state.
 
 ### Force Recover Sources (No Snapshot)
 
-Emergency fallback when a usable exact snapshot is unavailable.
-
-It:
-
-- clears destination mesh/material output;
-- clears a matching combined `MeshCollider` reference;
-- activates descendant MeshFilter GameObjects;
-- enables descendant MeshRenderers.
+Emergency fallback when a usable exact snapshot is unavailable. It clears destination mesh/material output, clears a matching combined `MeshCollider`, activates descendant MeshFilter GameObjects, and enables descendant MeshRenderers.
 
 Because no exact snapshot is available, intentionally disabled helpers or variants can also be enabled.
 
@@ -282,21 +273,11 @@ The package does not merge arbitrary `BoxCollider`, `CapsuleCollider`, `SphereCo
 
 Use **Save Combined Mesh** to save a generated mesh as a `.asset` below `Assets`.
 
-Example folder field:
-
-```text
-Generated/CombinedMeshes
-```
-
 Saved mesh assets are detached, not deleted, by Restore/Recovery.
 
 ## Optimization notes
 
-Manual combining can reduce:
-
-- renderer count;
-- per-renderer CPU overhead;
-- draw submission overhead when compatible geometry/materials are grouped.
+Manual combining can reduce renderer count, per-renderer CPU overhead, and draw submission overhead when compatible geometry/materials are grouped.
 
 Trade-offs:
 
@@ -311,17 +292,9 @@ Prefer bounded spatial clusters such as rooms, building sections, or static prop
 
 `Mesh.CombineMeshes` concatenates geometry. It is not a general Boolean/topology optimizer.
 
-The package still does not provide a general-purpose solution for:
+The package still does not provide a general-purpose solution for arbitrary Boolean union, partial coplanar face removal, polygon matching across different triangulations, destructive weld-by-position, general non-manifold repair, automatic removal of all hidden/internal geometry, or unused-vertex compaction after exact-face cleanup.
 
-- arbitrary Boolean union;
-- partial coplanar face removal;
-- polygon matching across different triangulations;
-- destructive weld-by-position;
-- general non-manifold repair;
-- automatic removal of all hidden/internal geometry;
-- unused-vertex compaction after exact-face cleanup.
-
-The coplanar UV2 stitcher can bridge exact boundaries and partial/T-junction boundary segments for **lightmap UV continuity** without modifying render topology.
+The coplanar UV2 stitcher can bridge exact seams and partial/T-junction seam segments for **lightmap UV continuity** without modifying render topology.
 
 ## License and upstream
 
