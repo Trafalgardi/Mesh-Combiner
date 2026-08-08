@@ -2,6 +2,29 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.6.0-dev.2] - 2026-08-09
+
+### Inspector / workflow state
+
+- Redesigned the custom Inspector around explicit workflow states instead of continuously re-validating intentionally deactivated source hierarchies.
+- Added `READY`, `COMBINED`, `OUTPUT WITHOUT SNAPSHOT`, and `INTERRUPTED / RECOVERABLE` states.
+- Combined output now shows a compact result card with Mesh name, vertex/triangle/submesh counts, index format, material count, exact-restore availability, and baked-lightmap assignment.
+- When the destination renderer has a valid baked lightmap assignment, the result state is displayed as **COMBINED • BAKED**.
+- Source controls and Analyzer are paused while combined output is active; deactivated source objects are no longer reported as fresh validation errors after a successful Combine.
+- Added a crash-persistent combined marker so a pre-existing root Mesh is not mistaken for generated output merely because `MeshFilter.sharedMesh` is non-null.
+- Added explicit interrupted-state recovery when a restore snapshot exists but output creation did not finish.
+- Included / Ignored / Issues lists now remain collapsed by default.
+- Analyzer no longer auto-runs just because the Inspector opened; manual Analyze / Validate and Combine-time validation remain available.
+- Replaced nested boxed sections with lighter foldout-header sections.
+
+### Fixed
+
+- Fixed DarkSkin console spam caused by passing `Tools > Mesh Combiner > Coplanar Stitched UV2...` as a `GUIStyle` name to `EditorGUILayout.LabelField`.
+
+### Documentation
+
+- Updated README for the workflow-aware Inspector, development state machine, baked-state reporting, and collapsed Analyzer reports.
+
 ## [2.6.0-dev.1] - 2026-08-09
 
 ### Added
