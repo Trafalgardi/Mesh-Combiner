@@ -304,14 +304,9 @@ public static class MeshCoplanarLightmapUv
                 ref exactEdgeConnections);
         }
 
-        List<EdgeRecord> boundaryEdges = new List<EdgeRecord>();
-        foreach (List<EdgeRecord> owners in edgeOwners.Values)
-        {
-            if (owners.Count == 1) boundaryEdges.Add(owners[0]);
-        }
-
+        List<EdgeRecord> seamCandidateEdges = CollectSeamCandidateEdges(edgeOwners, minimumNormalDot);
         int partialCollinearEdgeConnections = StitchPartialCollinearBoundaryEdges(
-            boundaryEdges,
+            seamCandidateEdges,
             minimumNormalDot,
             coplanarAngleDegrees,
             positionTolerance,
@@ -378,7 +373,7 @@ public static class MeshCoplanarLightmapUv
             charts.Count,
             exactEdgeConnections,
             partialCollinearEdgeConnections,
-            boundaryEdges.Count,
+            seamCandidateEdges.Count,
             chartByVertex.Count,
             packingScale,
             positionTolerance,
@@ -473,6 +468,37 @@ public static class MeshCoplanarLightmapUv
         }
 
         owners.Add(new EdgeRecord(a, b, triangleIndex, normal));
+    }
+
+    private static List<EdgeRecord> CollectSeamCandidateEdges(
+        Dictionary<EdgeKey, List<EdgeRecord>> edgeOwners,
+        float minimumNormalDot)
+    {
+        List<EdgeRecord> candidates = new List<EdgeRecord>();
+
+        foreach (List<EdgeRecord> owners in edgeOwners.Values)
+        {
+            if (owners.Count == 1)
+            {
+                candidates.Add(owners[0]);
+                continue;
+            }
+
+            if (owners.Count == 2 && Vector3.Dot(owners[0].normal, owners[1].normal) >= minimumNormalDot)
+            {
+                // Ordinary interior triangulation edge on one smooth/coplanar surface.
+                // It cannot represent a T-junction between disconnected modular surfaces.
+                continue;
+            }
+
+            // Hard perimeter edges on closed solids have two owners with different normals
+            // (for example front face + side face). Non-manifold/exactly-overlapped groups can
+            // contain more owners. Keep all such records so coplanar records can be matched
+            // against differently segmented collinear edges in neighboring modules.
+            candidates.AddRange(owners);
+        }
+
+        return candidates;
     }
 
     private static int StitchPartialCollinearBoundaryEdges(
