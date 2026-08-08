@@ -1,20 +1,17 @@
 # Mesh Combiner for Unity 6
 
-A Unity 6 mesh-combining utility focused on reducing renderer/draw-call overhead and preparing static geometry for baked-lighting workflows.
+A maintained Unity 6 fork of `dawid-t/Mesh-Combiner` focused on two practical goals:
 
-This repository is a maintained fork of `dawid-t/Mesh-Combiner`. The fork adds Unity 6 compatibility work, UPM installation, safer Editor workflows, multi-material handling, validation, collider output, several lightmap UV2 workflows, conservative geometry cleanup, duplicate-source filtering, and crash-persistent recovery.
+- reduce renderer / draw-submission overhead by combining static meshes;
+- prepare modular geometry for reliable baked-lighting workflows.
+
+The fork keeps the original idea small and Editor-friendly, but adds UPM packaging, safer recovery, material/submesh handling, source validation, MeshCollider output, duplicate filtering, geometry cleanup, and several UV2 strategies including the seam-aware **Coplanar Stitched UV2** mode.
 
 ## Installation
 
 ### Unity Package Manager — Git URL
 
 Open **Window -> Package Management -> Package Manager**, click **+**, choose **Install package from git URL...**, and paste:
-
-```text
-https://github.com/Trafalgardi/Mesh-Combiner.git#agent/unity6-modernization
-```
-
-After the modernization branch is merged, the default branch can be installed with:
 
 ```text
 https://github.com/Trafalgardi/Mesh-Combiner.git
@@ -26,49 +23,48 @@ Package ID:
 com.trafalgardi.mesh-combiner
 ```
 
-Current package version: **2.4.2**
+Current version: **2.5.0**
 
-## Requirements
+Requirements:
 
-- Unity 6.0 (`6000.0`) or newer.
-- Git available in `PATH` for Git-URL UPM installation.
-- Runtime combining requires source meshes with **Read/Write Enabled**.
-- Editor combining can use imported meshes with Read/Write disabled.
+- Unity 6.0 (`6000.0`) or newer;
+- Git available in `PATH` for Git-URL UPM installation;
+- runtime combining requires source meshes with **Read/Write Enabled**;
+- Edit Mode combining can use imported meshes with Read/Write disabled.
 
 ## Quick start
 
 1. Create/select a parent GameObject.
 2. Add `MeshFilter`, `MeshRenderer`, and `MeshCombiner`.
-3. Put source meshes below that GameObject.
-4. Configure combine/material/lightmap/output options.
+3. Put source meshes under that GameObject.
+4. Configure material, output and lightmap settings.
 5. Click **Combine Meshes**.
-6. Inspect the generated mesh and lighting debug views.
+6. Inspect the generated mesh and, for baked geometry, the Lighting debug views.
 7. Optionally save the generated mesh as a `.asset`.
 
-By default the source hierarchy is deactivated rather than destroyed so the operation remains recoverable.
+For normal Editor workflows, keep source objects recoverable instead of destroying them.
 
 ## Main features
 
-- transform-safe destination-local mesh combining;
+- destination-local transform-safe mesh combining;
 - single-material and multi-material output;
-- submesh/material preservation;
-- UInt16/UInt32 index-buffer handling;
+- source submesh/material preservation;
+- UInt16 / UInt32 index-buffer selection;
 - optional combined `MeshCollider`;
-- source validation and aggregated logs;
+- aggregated validation logs instead of per-mesh warning spam;
 - disabled-renderer filtering;
 - generic nested exact-duplicate helper/proxy filtering;
 - multiple lightmap UV2 modes;
-- experimental coplanar stitched UV2 generation;
-- closed-mesh T-junction / partial-edge-aware coplanar stitching;
+- integrated **Coplanar Stitched UV2** mode with T-junction support;
 - optional exact opposing-face cleanup;
-- automatic baked-GI setup;
+- baked-GI renderer setup;
 - Editor Undo support;
 - crash-persistent exact restore;
-- emergency source recovery without a snapshot;
+- emergency force recovery without a snapshot;
 - generated mesh asset saving;
-- UPM package layout and asmdefs.
+- UPM package layout, asmdefs and committed `.meta` files.
 
-## Source selection
+## Source selection and duplicate filtering
 
 The combiner searches child `MeshFilter` components below the target root.
 
@@ -81,27 +77,19 @@ It automatically skips:
 - disabled `MeshRenderer` components;
 - nested exact duplicates.
 
-### Nested exact-duplicate filtering
-
-A deeper child is skipped when an ancestor below the combiner root references the same `sharedMesh` and has effectively the same world transform. This is useful for helper/bake-proxy hierarchies and does not depend on object names.
-
-## Read/Write
-
-In Edit Mode, the package can combine imported meshes whose Read/Write importer flag is disabled.
-
-Runtime combining needs CPU-side mesh data, so source meshes combined while the application is running must be readable.
+A nested exact duplicate is skipped when a deeper child references the same `sharedMesh` and has effectively the same world transform as an ancestor below the combiner root. This is useful for helper/bake-proxy hierarchies and does **not** depend on object names.
 
 ## Materials and submeshes
 
 ### Create Multi-Material Mesh = Off
 
-Use this only when all source submeshes use the same material. The combiner validates the source layout rather than silently flattening incompatible materials.
+Use this only when all source submeshes use the same material. The combiner validates the source layout instead of silently flattening incompatible materials.
 
 ### Create Multi-Material Mesh = On
 
 Source submeshes are grouped by shared `Material` reference. Repeated references to the same material do not create unnecessary duplicate material slots.
 
-Combining multiple materials still produces multiple material/submesh draws. Mesh combining reduces renderer/object overhead; it does not turn unrelated materials into one draw call.
+Combining multiple materials does not magically make them one draw call: different materials still require different material/submesh draws. The main win is fewer renderers and less submission overhead.
 
 ## Lightmap UV modes
 
@@ -109,120 +97,90 @@ Baked lightmaps use `Mesh.uv2`.
 
 ### None
 
-Leaves lightmap UV processing to another pipeline.
+Leaves UV2 untouched by the combiner. Use this for non-lightmapped output or when another pipeline will generate UV2.
 
 ### Preserve Source UV2
 
-Copies source UV2 unchanged. This is mainly diagnostic: independently authored modular meshes often occupy the same `0..1` UV space and therefore overlap after combining.
+Copies source UV2 unchanged. This is mostly diagnostic because repeated modular meshes often reuse the same `0..1` UV2 space and therefore overlap after combining.
 
 ### Preserve And Repack Source UV2
 
-Reuses authored UV2 charts and repacks them into one non-overlapping atlas. Relative chart size is based on world-space surface area and source UV area, with source **Scale In Lightmap** taken into account in Edit Mode.
+Reuses authored UV2 charts and repacks them into one non-overlapping atlas.
 
-Different charts may show different checker phase/offset in Unity's Baked Lightmap visualization. Matching checker **size/density** is the important part.
+The repacker:
+
+1. finds source UV2 charts;
+2. measures world-space surface area and source UV area;
+3. accounts for source **Scale In Lightmap** in Edit Mode;
+4. derives relative texel density;
+5. packs charts with configurable texel padding;
+6. preserves source chart topology.
+
+This mode avoids topology changes, but independent source charts remain independent charts. It therefore cannot remove every modular baked seam.
 
 ### Regenerate UV2
 
-Combines first and then calls Unity's secondary UV unwrapper. This is useful when source UV2 is unusable, but Unity can split vertices and move baked seams while generating new charts.
+Combines first and then calls Unity's secondary UV unwrapper.
 
-## Experimental: Coplanar Stitched UV2
+Useful when source UV2 is missing or unusable, but Unity may split vertices and move seams while generating new charts.
 
-Open:
+### Coplanar Stitched UV2
+
+This is the preferred mode for modular static architecture when visually continuous coplanar pieces should bake as one lightmap surface.
+
+During **Combine Meshes**, the combiner:
+
+1. combines the render geometry normally;
+2. reads triangle geometry in world space;
+3. connects triangles across exact shared geometric edges when normals are coplanar;
+4. also detects collinear partially-overlapping seam edges, including T-junctions;
+5. builds connected coplanar surfaces;
+6. planar-projects each connected surface into one continuous UV2 chart;
+7. packs the charts into one atlas;
+8. writes UV2 only.
+
+It does **not** weld render vertices and does not change positions, triangle indices, UV0, normals, tangents or materials.
+
+The standard Inspector mode uses the validated defaults:
+
+```text
+Edge position tolerance: 0.0001 Unity units
+Coplanar angle:          1 degree
+Chart padding:           2 texels
+Padding reference:       512
+```
+
+`Chart Padding` and `Padding Reference Size` are available directly in the Inspector. The advanced tool remains available under:
 
 ```text
 Tools -> Mesh Combiner -> Coplanar Stitched UV2...
 ```
 
-This tool operates on an already combined mesh. It targets baked seams caused by modular pieces that form one visually continuous planar surface but still have disconnected lightmap charts.
+Use the advanced tool when manually testing a previously combined mesh or when a special asset needs different tolerance / angle values.
 
-The tool:
+### Why T-junction support matters
 
-- reads triangle geometry in world space;
-- joins triangles across exact matching geometric edges when their normals are coplanar;
-- also joins collinear partially-overlapping seam edges;
-- supports T-junctions where one long edge touches one or more shorter edges;
-- builds connected coplanar surfaces;
-- planar-projects each surface into one continuous UV2 chart;
-- packs the charts into one atlas;
-- writes only UV2;
-- does not modify positions, triangles, UV0, normals, tangents, or materials;
-- clones the current mesh before writing UV2;
-- aborts rather than silently corrupting UV2 when one vertex index is shared by incompatible hard-angle charts.
-
-### Closed meshes and seam candidates
-
-A visible modular boundary is not necessarily an **open mesh boundary**.
-
-For a closed wall module, the front-face perimeter edge is normally shared by two triangles from different surfaces, for example:
+A window, door, arch or other cutout often changes how a modular boundary is segmented:
 
 ```text
-front face
-    |
-    | shared geometric edge
-    |
-side/end face
+neighbor module
+|---------------------------|
+
+opening module
+|--------|----|-------------|
 ```
 
-So `owners.Count == 1` is not a valid generic test for modular seams.
+The surfaces are flush, but there is no identical endpoint-to-endpoint edge pair. Coplanar Stitched UV2 also matches compatible collinear segments that physically overlap, so these surfaces can still become one lightmap chart.
 
-Since **2.4.2**, the stitcher classifies seam candidates as follows:
-
-- an edge with one owner is a candidate;
-- an edge with exactly two coplanar owners is treated as an ordinary interior triangulation edge and skipped;
-- hard edges with different owner normals are candidates;
-- non-manifold / multi-owner edge groups are candidates.
-
-Partial/T-junction matching then compares compatible coplanar candidate records and stitches only segments that are collinear and overlap in world space.
-
-This keeps the logic generic for closed modular walls, architecture, props, cutouts, doors, windows, arches, and other segmented meshes without relying on object names.
-
-### Why T-junction stitching exists
-
-Two flush modules can describe the same geometric boundary with different segmentation:
-
-```text
-neighbor edge
-|-------------------------|
-
-cutout/opening module
-|--------|-----|----------|
-```
-
-The surface is continuous, but there is no identical endpoint-to-endpoint edge pair. The partial matcher allows the long edge to connect to the shorter collinear segments.
-
-Matching is conservative:
-
-- owning triangle normals must pass **Coplanar Angle**;
-- edge lines must coincide within **Edge Position Tolerance**;
-- the segments must overlap by a non-zero length;
-- partial-edge direction matching is capped at 1 degree even if Coplanar Angle is higher.
-
-The result log reports:
-
-- exact shared-edge connections;
-- partial/T-junction connections;
-- total stitched connections;
-- seam-candidate edge records inspected;
-- resulting chart count;
-- packing scale.
-
-This feature remains experimental and separate from the normal `Lightmap UV Mode` enum until it has wider production validation.
-
-### Debug-view note
-
-The stitcher deliberately does **not** weld render vertices. Two modules can remain topologically disconnected while receiving continuous UV2 coordinates along a geometric seam.
-
-Unity's **UV Overlap** or **Texel Validity** debug views can therefore flag boundary texels around complex cutouts/jambs even when the final baked surface improves. Use the final baked result together with the debug views; do not use one debug mode as the sole pass/fail criterion.
-
-## Unity lightmap diagnostics
+## Lighting diagnostics
 
 Useful Scene View debug modes:
 
-- **Baked Lightmap** — inspect effective texel density and chart continuity;
+- **Baked Lightmap** — inspect texel density and chart continuity;
 - **UV Overlap** — detect overlapping sampling regions;
 - **Texel Validity** — identify texels invalidated by backface/geometry conditions.
 
-A clean UV Overlap and Texel Validity view does not by itself guarantee seamless lighting. A visible seam can still exist where one visually flat wall is split into separate UV2 charts.
+Important: Coplanar Stitched UV2 intentionally keeps render topology disconnected. Unity can therefore mark some stitched boundary texels in `UV Overlap` / `Texel Validity`, especially around hard perimeters and cutouts, even when the actual baked surface is clean. Treat debug views as diagnostics, not the sole pass/fail criterion. Always inspect the final bake.
 
 ## Geometry cleanup
 
@@ -230,38 +188,32 @@ A clean UV Overlap and Texel Validity view does not by itself guarantee seamless
 
 Optional and disabled by default.
 
-It removes pairs of coincident triangles when the same three destination-local positions match within **Position Tolerance** and the faces point in opposite directions.
+It removes pairs of coincident triangles when:
 
-The cleanup only changes triangle index buffers. It does not weld vertices or rewrite normals, tangents, UVs, colors, or other vertex attributes.
+- the same three destination-local positions match within **Position Tolerance**;
+- the faces point in opposite directions.
 
-### Important limitation
+The cleanup only changes triangle index buffers. It does not weld vertices or rewrite normals, tangents, UVs, colors, skinning data or other attributes.
 
-This is not a Boolean union. It does not remove:
-
-- partially overlapping coplanar surfaces;
-- coincident surfaces with different triangulation/diagonals;
-- T-junction polygons merely because they visually touch;
-- arbitrary intersecting geometry.
-
-A zero removal count can therefore be correct even when two closed modules appear to sit perfectly flush.
+This is intentionally conservative. It is **not** a Boolean union and does not remove partially overlapping coplanar polygons or coincident surfaces with different triangulation.
 
 ## Restore and recovery
 
 ### Restore Exact State
 
-Before Combine, the Editor stores source `activeSelf` and `MeshRenderer.enabled` state using stable Unity `GlobalObjectId` references. The snapshot is persisted before hierarchy mutation and survives domain reloads / Editor restarts when the scene objects still exist.
+Before Combine, the Editor stores source `activeSelf` and `MeshRenderer.enabled` state.
 
-Restore Exact State clears combined output and restores the recorded source state.
+The snapshot is persisted before hierarchy mutation and uses stable `GlobalObjectId` references, so it survives domain reloads and Editor restarts/crashes while the scene objects still exist.
 
 ### Force Recover Sources (No Snapshot)
 
-Emergency fallback when a usable exact snapshot is unavailable. It clears destination mesh/material output, clears a matching combined `MeshCollider`, activates descendant MeshFilter GameObjects, and enables descendant MeshRenderers.
+Emergency fallback when a valid exact snapshot is unavailable.
 
-Because no exact snapshot is available, intentionally disabled helpers or variants can also be enabled.
+It clears combined output and re-enables descendant mesh sources. Because there is no original snapshot, intentionally disabled helpers or variants can also be enabled.
 
 ### Destroy Combined Children
 
-Destructive mode. Exact restore and force recovery cannot reconstruct objects that were actually destroyed. Prefer source deactivation for normal Editor workflows.
+Destructive mode. Exact Restore and Force Recover cannot reconstruct objects that were actually destroyed. Prefer source deactivation for normal Editor workflows.
 
 ## MeshCollider output
 
@@ -273,28 +225,46 @@ The package does not merge arbitrary `BoxCollider`, `CapsuleCollider`, `SphereCo
 
 Use **Save Combined Mesh** to save a generated mesh as a `.asset` below `Assets`.
 
+Example:
+
+```text
+Generated/CombinedMeshes
+```
+
 Saved mesh assets are detached, not deleted, by Restore/Recovery.
 
-## Optimization notes
+## Optimization guidance
 
-Manual combining can reduce renderer count, per-renderer CPU overhead, and draw submission overhead when compatible geometry/materials are grouped.
+Manual combining can reduce:
+
+- renderer count;
+- per-renderer CPU overhead;
+- draw submission overhead when compatible geometry/materials are grouped.
 
 Trade-offs:
 
 - pieces can no longer be culled independently;
 - combining an entire level into one mesh can make culling worse;
-- multiple materials still require multiple material/submesh draws;
-- modern URP/HDRP projects should still evaluate SRP Batcher and other current rendering optimizations.
+- multiple materials still require multiple submesh/material draws;
+- modern URP/HDRP projects should still evaluate SRP Batcher / GPU-driven rendering separately.
 
-Prefer bounded spatial clusters such as rooms, building sections, or static prop groups instead of blindly combining a whole scene.
+Prefer bounded spatial clusters such as rooms, building sections, floors or static prop groups instead of blindly combining a whole map.
 
 ## Current topology limitations
 
 `Mesh.CombineMeshes` concatenates geometry. It is not a general Boolean/topology optimizer.
 
-The package still does not provide a general-purpose solution for arbitrary Boolean union, partial coplanar face removal, polygon matching across different triangulations, destructive weld-by-position, general non-manifold repair, automatic removal of all hidden/internal geometry, or unused-vertex compaction after exact-face cleanup.
+The package does not yet provide a general-purpose solution for:
 
-The coplanar UV2 stitcher can bridge exact seams and partial/T-junction seam segments for **lightmap UV continuity** without modifying render topology.
+- arbitrary Boolean union;
+- partial coplanar face removal;
+- coincident polygon matching across different triangulations;
+- destructive weld-by-position;
+- general non-manifold repair;
+- automatic removal of all hidden/internal geometry;
+- unused-vertex compaction after exact-face cleanup.
+
+Coplanar Stitched UV2 solves lightmap continuity without changing render topology; geometry cleanup remains deliberately conservative.
 
 ## License and upstream
 
