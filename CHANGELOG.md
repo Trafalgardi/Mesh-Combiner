@@ -18,6 +18,11 @@ All notable changes to this fork are documented in this file.
 - Geometry, UV0, normals, tangents, materials, triangle indices, and render topology remain unchanged; only UV2 is rewritten.
 - This does not perform a Boolean union or remove partially overlapping coplanar faces. It only expands lightmap-chart connectivity across compatible geometric boundary segments.
 
+### Validation target
+
+- Real-scene testing of 2.4.0 removed baked seams on ordinary flush wall-module boundaries but left seams next to window/door modules where openings change boundary segmentation.
+- 2.4.1 specifically targets those T-junction/partial-boundary cases without adding project-specific names or assumptions.
+
 ## [2.4.0] - 2026-08-08
 
 ### Added
