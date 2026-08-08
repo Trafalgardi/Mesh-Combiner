@@ -2,6 +2,22 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.4.1] - 2026-08-08
+
+### Added
+
+- Coplanar Stitched UV2 now detects **collinear partially-overlapping boundary edges** in addition to exact endpoint-to-endpoint edge matches.
+- Added generic T-junction support for modular surfaces whose boundary segmentation differs between neighboring pieces, such as walls containing windows, doors, arches, cutouts, or other openings.
+- A long boundary edge can now stitch to one or more shorter collinear edges when the segments physically overlap and the owning triangles pass the coplanar-normal test.
+- Result diagnostics now report exact shared-edge connections, partial/T-junction connections, total stitched connections, and the number of boundary edges inspected.
+
+### Safety / behavior
+
+- Partial-edge matching uses the configured world-space position tolerance for line coincidence and non-zero segment overlap.
+- Partial-edge direction matching is capped at 1 degree even when the configured coplanar triangle angle is higher.
+- Geometry, UV0, normals, tangents, materials, triangle indices, and render topology remain unchanged; only UV2 is rewritten.
+- This does not perform a Boolean union or remove partially overlapping coplanar faces. It only expands lightmap-chart connectivity across compatible geometric boundary segments.
+
 ## [2.4.0] - 2026-08-08
 
 ### Added
