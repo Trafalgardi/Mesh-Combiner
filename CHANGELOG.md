@@ -2,6 +2,20 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.0.1] - 2026-08-08
+
+### Added
+
+- Added **Restore / Undo Combine** for fast iteration in the Editor.
+- Restore clears the destination combined Mesh and materials, clears the generated MeshCollider reference, reactivates child GameObjects, and re-enables child MeshRenderers.
+- Unsaved transient combined Mesh objects are removed through the Unity Undo system; saved `.asset` meshes are kept.
+
+### Changed
+
+- Read/Write validation is now aggregated into one message instead of logging one warning for every source mesh.
+- Edit Mode non-readable meshes are reported as informational because Editor combining can still use them; runtime combining still fails with one aggregated error.
+- Missing Mesh and MeshRenderer validation messages are aggregated as well.
+
 ## [2.0.0] - 2026-08-08
 
 ### Added
