@@ -9,7 +9,8 @@ public enum LightmapUvMode
     None = 0,
     PreserveSourceUv2 = 1,
     PreserveAndRepackSourceUv2 = 2,
-    RegenerateUv2 = 3
+    RegenerateUv2 = 3,
+    CoplanarStitchedUv2 = 4
 }
 
 [RequireComponent(typeof(MeshFilter))]
@@ -23,6 +24,8 @@ public class MeshCombiner : MonoBehaviour
     private const float PackingEpsilon = 0.000001f;
     private const float UvEdgeQuantization = 100000f;
     private const float MatrixComparisonEpsilon = 0.00001f;
+    private const float DefaultCoplanarPositionTolerance = 0.0001f;
+    private const float DefaultCoplanarAngleDegrees = 1f;
 
     [Header("Combine")]
     [SerializeField] private bool createMultiMaterialMesh;
@@ -54,6 +57,8 @@ public class MeshCombiner : MonoBehaviour
     private int _lastSkippedDisabledRenderers;
     private int _lastSkippedNestedDuplicates;
     private int _lastRemovedExactOpposingFacePairs;
+    private MeshCoplanarLightmapUv.Result _lastCoplanarResult;
+    private bool _hasLastCoplanarResult;
 
     private sealed class UvChart
     {
@@ -241,11 +246,32 @@ public class MeshCombiner : MonoBehaviour
                 : 0;
             combinedMesh.RecalculateBounds();
 
+            _hasLastCoplanarResult = false;
             int verticesBeforeUvGeneration = combinedMesh.vertexCount;
             if (lightmapUvMode == LightmapUvMode.RegenerateUv2 && !GenerateUVIfRequested(combinedMesh))
             {
                 DestroyTemporaryMesh(combinedMesh);
                 return false;
+            }
+
+            if (lightmapUvMode == LightmapUvMode.CoplanarStitchedUv2)
+            {
+                if (!MeshCoplanarLightmapUv.TryGenerate(
+                        combinedMesh,
+                        transform.localToWorldMatrix,
+                        DefaultCoplanarPositionTolerance,
+                        DefaultCoplanarAngleDegrees,
+                        Mathf.Clamp(repackPaddingTexels, 1, 16),
+                        Mathf.Clamp(repackPaddingReferenceResolution, 128, 4096),
+                        out _lastCoplanarResult,
+                        out string coplanarError))
+                {
+                    Debug.LogError("Mesh Combiner: Coplanar Stitched UV2 failed for \"" + name + "\": " + coplanarError, this);
+                    DestroyTemporaryMesh(combinedMesh);
+                    return false;
+                }
+
+                _hasLastCoplanarResult = true;
             }
 
             MeshFilter destinationMeshFilter = GetComponent<MeshFilter>();
@@ -873,7 +899,7 @@ public class MeshCombiner : MonoBehaviour
         }
         return success;
 #else
-        Debug.LogError("Mesh Combiner: Regenerate UV2 is Editor-only. Use None/Preserve modes for runtime combining.", this);
+        Debug.LogError("Mesh Combiner: Regenerate UV2 is Editor-only. Use None/Preserve/Coplanar modes for runtime combining.", this);
         return false;
 #endif
     }
@@ -970,6 +996,16 @@ public class MeshCombiner : MonoBehaviour
             case LightmapUvMode.RegenerateUv2:
                 return ", UV2 regenerated (+" + Mathf.Max(0, addedVertices) +
                        " vertices from chart splits)" + sourceFiltering;
+            case LightmapUvMode.CoplanarStitchedUv2:
+                if (!_hasLastCoplanarResult) return ", Coplanar Stitched UV2 requested but no result was recorded" + sourceFiltering;
+                return ", Coplanar Stitched UV2: " + _lastCoplanarResult.chartCount +
+                       " charts, " + _lastCoplanarResult.exactEdgeConnections + " exact + " +
+                       _lastCoplanarResult.partialCollinearEdgeConnections + " partial/T-junction connections, " +
+                       _lastCoplanarResult.boundaryEdgeCount + " seam-candidate edge records, packing scale " +
+                       _lastCoplanarResult.packingScale.ToString("0.###") + ", tolerance " +
+                       DefaultCoplanarPositionTolerance.ToString("0.######") + ", angle " +
+                       DefaultCoplanarAngleDegrees.ToString("0.###") + " deg, " + repackPaddingTexels +
+                       " texel padding @ " + repackPaddingReferenceResolution + " reference" + sourceFiltering;
             default:
                 return sourceFiltering;
         }
