@@ -35,6 +35,7 @@ public class MeshCombinerEditor : Editor
 
         MeshCombiner meshCombiner = (MeshCombiner)target;
         MeshFilter meshFilter = meshCombiner.GetComponent<MeshFilter>();
+        MeshRenderer meshRenderer = meshCombiner.GetComponent<MeshRenderer>();
         Mesh mesh = meshFilter.sharedMesh;
 
         using (new EditorGUI.DisabledScope(true))
@@ -95,7 +96,8 @@ public class MeshCombinerEditor : Editor
         if (_destroyCombinedChildren.boolValue)
         {
             EditorGUILayout.HelpBox(
-                "Destructive mode is enabled. Undo is supported in the Editor, but keeping source objects deactivated is safer for production workflows.",
+                "Destructive mode is enabled. The Restore / Undo Combine button cannot reconstruct child objects after they were destroyed. " +
+                "Use Unity Undo immediately, or keep source objects deactivated instead.",
                 MessageType.Warning);
         }
 
@@ -120,16 +122,52 @@ public class MeshCombinerEditor : Editor
         serializedObject.ApplyModifiedProperties();
 
         EditorGUILayout.Space();
-        if (GUILayout.Button("Combine Meshes", GUILayout.Height(28)))
-        {
-            Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Combine Meshes");
+        bool hasSourceMeshes = HasSourceMeshes(meshCombiner, meshFilter);
+        bool hasRestorableState = HasRestorableState(meshCombiner, meshFilter, meshRenderer);
 
-            if (meshCombiner.TryCombineMeshes(true))
+        using (new EditorGUILayout.HorizontalScope())
+        {
+            if (GUILayout.Button("Combine Meshes", GUILayout.Height(28)))
             {
-                EditorUtility.SetDirty(meshCombiner);
-                EditorUtility.SetDirty(meshFilter);
-                EditorUtility.SetDirty(meshCombiner.GetComponent<MeshRenderer>());
+                Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Combine Meshes");
+
+                if (meshCombiner.TryCombineMeshes(true))
+                {
+                    EditorUtility.SetDirty(meshCombiner);
+                    EditorUtility.SetDirty(meshFilter);
+                    EditorUtility.SetDirty(meshRenderer);
+                }
             }
+
+            using (new EditorGUI.DisabledScope(!hasRestorableState || !hasSourceMeshes))
+            {
+                if (GUILayout.Button("Restore / Undo Combine", GUILayout.Height(28)))
+                {
+                    Mesh generatedMesh = meshFilter.sharedMesh;
+
+                    Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Restore Mesh Combine Sources");
+                    meshCombiner.RestoreCombinedState(true);
+
+                    // A transient generated Mesh is no longer referenced after restore. Remove it through
+                    // the Undo system so rapid Combine -> Restore iteration does not accumulate orphan Mesh objects.
+                    // Saved .asset meshes are intentionally kept in the Project.
+                    if (generatedMesh != null && !AssetDatabase.Contains(generatedMesh))
+                    {
+                        Undo.DestroyObjectImmediate(generatedMesh);
+                    }
+
+                    EditorUtility.SetDirty(meshCombiner);
+                    EditorUtility.SetDirty(meshFilter);
+                    EditorUtility.SetDirty(meshRenderer);
+                }
+            }
+        }
+
+        if (meshFilter.sharedMesh != null && !hasSourceMeshes)
+        {
+            EditorGUILayout.HelpBox(
+                "No source child MeshFilters remain. Restore cannot reconstruct children destroyed by a destructive combine; use Unity Undo if it is still available.",
+                MessageType.Warning);
         }
 
         EditorGUILayout.Space();
@@ -167,6 +205,32 @@ public class MeshCombinerEditor : Editor
                 EditorUtility.SetDirty(meshCombiner);
             }
         }
+    }
+
+    private static bool HasSourceMeshes(MeshCombiner meshCombiner, MeshFilter destinationMeshFilter)
+    {
+        return meshCombiner.GetComponentsInChildren<MeshFilter>(true)
+            .Any(sourceMeshFilter => sourceMeshFilter != null && sourceMeshFilter != destinationMeshFilter);
+    }
+
+    private static bool HasRestorableState(
+        MeshCombiner meshCombiner,
+        MeshFilter destinationMeshFilter,
+        MeshRenderer destinationMeshRenderer)
+    {
+        if (destinationMeshFilter.sharedMesh != null)
+        {
+            return true;
+        }
+
+        if (meshCombiner.GetComponentsInChildren<Transform>(true)
+            .Any(child => child != null && child != meshCombiner.transform && !child.gameObject.activeSelf))
+        {
+            return true;
+        }
+
+        return meshCombiner.GetComponentsInChildren<MeshRenderer>(true)
+            .Any(renderer => renderer != null && renderer != destinationMeshRenderer && !renderer.enabled);
     }
 
     private static bool IsValidPath(string folderPath)
