@@ -2,6 +2,20 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.2.2] - 2026-08-08
+
+### Fixed
+
+- Replaced the Editor-session-only restore snapshot with a crash-persistent snapshot stored through `EditorPrefs`.
+- Snapshot entries now keep both the current InstanceID and a stable `GlobalObjectId`, so exact source state can be resolved again after domain reloads and Editor restarts.
+- The restore snapshot is persisted **before** the hierarchy is mutated by Combine, so an Editor crash during/after Combine does not automatically lose the recovery data.
+
+### Added
+
+- Added **Force Recover Sources (No Snapshot)**. It clears the destination `MeshFilter`, output materials, and matching combined `MeshCollider`, then activates every descendant MeshFilter GameObject and enables its MeshRenderer.
+- Force recovery is intentionally aggressive and is available for stale/crashed scenes where no exact snapshot can be resolved. It can re-enable helpers or variants that were intentionally disabled before Combine.
+- Inspector help now clarifies that different checker phase/offset between independent lightmap charts is expected; matching checker size/texel density is the relevant diagnostic.
+
 ## [2.2.1] - 2026-08-08
 
 ### Fixed
