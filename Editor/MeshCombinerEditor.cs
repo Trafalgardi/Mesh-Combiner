@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEditor;
@@ -6,6 +8,29 @@ using UnityEngine;
 [CustomEditor(typeof(MeshCombiner))]
 public class MeshCombinerEditor : Editor
 {
+    private const string RestoreStateKeyPrefix = "Trafalgardi.MeshCombiner.RestoreState.";
+
+    [Serializable]
+    private sealed class RestoreSnapshot
+    {
+        public List<GameObjectState> gameObjects = new List<GameObjectState>();
+        public List<RendererState> renderers = new List<RendererState>();
+    }
+
+    [Serializable]
+    private sealed class GameObjectState
+    {
+        public int instanceId;
+        public bool activeSelf;
+    }
+
+    [Serializable]
+    private sealed class RendererState
+    {
+        public int instanceId;
+        public bool enabled;
+    }
+
     private SerializedProperty _createMultiMaterialMesh;
     private SerializedProperty _combineInactiveChildren;
     private SerializedProperty _meshFiltersToSkip;
@@ -96,7 +121,7 @@ public class MeshCombinerEditor : Editor
         if (_destroyCombinedChildren.boolValue)
         {
             EditorGUILayout.HelpBox(
-                "Destructive mode is enabled. The Restore / Undo Combine button cannot reconstruct child objects after they were destroyed. " +
+                "Destructive mode is enabled. Restore / Undo Combine cannot reconstruct destroyed child objects. " +
                 "Use Unity Undo immediately, or keep source objects deactivated instead.",
                 MessageType.Warning);
         }
@@ -122,51 +147,81 @@ public class MeshCombinerEditor : Editor
         serializedObject.ApplyModifiedProperties();
 
         EditorGUILayout.Space();
-        bool hasSourceMeshes = HasSourceMeshes(meshCombiner, meshFilter);
-        bool hasRestorableState = HasRestorableState(meshCombiner, meshFilter, meshRenderer);
+        bool hasRestoreSnapshot = HasRestoreSnapshot(meshCombiner);
+        bool destructiveMode = meshCombiner.DestroyCombinedChildren;
 
         using (new EditorGUILayout.HorizontalScope())
         {
-            if (GUILayout.Button("Combine Meshes", GUILayout.Height(28)))
+            using (new EditorGUI.DisabledScope(hasRestoreSnapshot))
             {
-                Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Combine Meshes");
-
-                if (meshCombiner.TryCombineMeshes(true))
+                if (GUILayout.Button("Combine Meshes", GUILayout.Height(28)))
                 {
-                    EditorUtility.SetDirty(meshCombiner);
-                    EditorUtility.SetDirty(meshFilter);
-                    EditorUtility.SetDirty(meshRenderer);
+                    RestoreSnapshot restoreSnapshot = CaptureRestoreSnapshot(meshCombiner, meshFilter);
+
+                    Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Combine Meshes");
+
+                    if (meshCombiner.TryCombineMeshes(true))
+                    {
+                        if (!destructiveMode)
+                        {
+                            SaveRestoreSnapshot(meshCombiner, restoreSnapshot);
+                        }
+                        else
+                        {
+                            ClearRestoreSnapshot(meshCombiner);
+                        }
+
+                        EditorUtility.SetDirty(meshCombiner);
+                        EditorUtility.SetDirty(meshFilter);
+                        EditorUtility.SetDirty(meshRenderer);
+                    }
+                    else
+                    {
+                        ClearRestoreSnapshot(meshCombiner);
+                    }
                 }
             }
 
-            using (new EditorGUI.DisabledScope(!hasRestorableState || !hasSourceMeshes))
+            using (new EditorGUI.DisabledScope(!hasRestoreSnapshot || destructiveMode))
             {
                 if (GUILayout.Button("Restore / Undo Combine", GUILayout.Height(28)))
                 {
-                    Mesh generatedMesh = meshFilter.sharedMesh;
-
-                    Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Restore Mesh Combine Sources");
-                    meshCombiner.RestoreCombinedState(true);
-
-                    // A transient generated Mesh is no longer referenced after restore. Remove it through
-                    // the Undo system so rapid Combine -> Restore iteration does not accumulate orphan Mesh objects.
-                    // Saved .asset meshes are intentionally kept in the Project.
-                    if (generatedMesh != null && !AssetDatabase.Contains(generatedMesh))
+                    RestoreSnapshot restoreSnapshot;
+                    if (TryGetRestoreSnapshot(meshCombiner, out restoreSnapshot))
                     {
-                        Undo.DestroyObjectImmediate(generatedMesh);
-                    }
+                        Mesh generatedMesh = meshFilter.sharedMesh;
 
-                    EditorUtility.SetDirty(meshCombiner);
-                    EditorUtility.SetDirty(meshFilter);
-                    EditorUtility.SetDirty(meshRenderer);
+                        Undo.RegisterFullObjectHierarchyUndo(meshCombiner.gameObject, "Restore Mesh Combine Sources");
+                        RestoreExactState(meshCombiner, meshFilter, meshRenderer, restoreSnapshot);
+                        ClearRestoreSnapshot(meshCombiner);
+
+                        // Saved .asset meshes stay in the Project. Only temporary generated Mesh objects
+                        // are removed so repeated Combine -> Restore tests do not accumulate orphan meshes.
+                        if (generatedMesh != null && !AssetDatabase.Contains(generatedMesh))
+                        {
+                            Undo.DestroyObjectImmediate(generatedMesh);
+                        }
+
+                        EditorUtility.SetDirty(meshCombiner);
+                        EditorUtility.SetDirty(meshFilter);
+                        EditorUtility.SetDirty(meshRenderer);
+                    }
                 }
             }
         }
 
-        if (meshFilter.sharedMesh != null && !hasSourceMeshes)
+        if (hasRestoreSnapshot)
         {
             EditorGUILayout.HelpBox(
-                "No source child MeshFilters remain. Restore cannot reconstruct children destroyed by a destructive combine; use Unity Undo if it is still available.",
+                "Restore will return child MeshFilter GameObjects and MeshRenderers to the exact active/enabled state captured before this combine. " +
+                "Originally inactive helper/variant meshes will stay inactive.",
+                MessageType.Info);
+        }
+        else if (meshFilter.sharedMesh != null)
+        {
+            EditorGUILayout.HelpBox(
+                "This combined mesh has no exact restore snapshot (for example, it was created before this package update or the Editor session was restarted). " +
+                "Use Unity Undo or reopen/reset the source hierarchy before the next comparison test.",
                 MessageType.Warning);
         }
 
@@ -207,30 +262,131 @@ public class MeshCombinerEditor : Editor
         }
     }
 
-    private static bool HasSourceMeshes(MeshCombiner meshCombiner, MeshFilter destinationMeshFilter)
+    private static RestoreSnapshot CaptureRestoreSnapshot(MeshCombiner meshCombiner, MeshFilter destinationMeshFilter)
     {
-        return meshCombiner.GetComponentsInChildren<MeshFilter>(true)
-            .Any(sourceMeshFilter => sourceMeshFilter != null && sourceMeshFilter != destinationMeshFilter);
+        RestoreSnapshot snapshot = new RestoreSnapshot();
+        HashSet<int> capturedGameObjects = new HashSet<int>();
+        HashSet<int> capturedRenderers = new HashSet<int>();
+
+        MeshFilter[] sourceMeshFilters = meshCombiner.GetComponentsInChildren<MeshFilter>(true);
+        foreach (MeshFilter sourceMeshFilter in sourceMeshFilters)
+        {
+            if (sourceMeshFilter == null || sourceMeshFilter == destinationMeshFilter)
+            {
+                continue;
+            }
+
+            GameObject sourceGameObject = sourceMeshFilter.gameObject;
+            int gameObjectId = sourceGameObject.GetInstanceID();
+            if (capturedGameObjects.Add(gameObjectId))
+            {
+                snapshot.gameObjects.Add(new GameObjectState
+                {
+                    instanceId = gameObjectId,
+                    activeSelf = sourceGameObject.activeSelf
+                });
+            }
+
+            MeshRenderer sourceRenderer = sourceMeshFilter.GetComponent<MeshRenderer>();
+            if (sourceRenderer == null)
+            {
+                continue;
+            }
+
+            int rendererId = sourceRenderer.GetInstanceID();
+            if (capturedRenderers.Add(rendererId))
+            {
+                snapshot.renderers.Add(new RendererState
+                {
+                    instanceId = rendererId,
+                    enabled = sourceRenderer.enabled
+                });
+            }
+        }
+
+        return snapshot;
     }
 
-    private static bool HasRestorableState(
+    private static void RestoreExactState(
         MeshCombiner meshCombiner,
         MeshFilter destinationMeshFilter,
-        MeshRenderer destinationMeshRenderer)
+        MeshRenderer destinationMeshRenderer,
+        RestoreSnapshot snapshot)
     {
-        if (destinationMeshFilter.sharedMesh != null)
+        Mesh combinedMesh = destinationMeshFilter.sharedMesh;
+
+        destinationMeshFilter.sharedMesh = null;
+        destinationMeshRenderer.sharedMaterials = Array.Empty<Material>();
+
+        MeshCollider meshCollider = meshCombiner.GetComponent<MeshCollider>();
+        if (meshCollider != null && (combinedMesh == null || meshCollider.sharedMesh == combinedMesh))
         {
-            return true;
+            meshCollider.sharedMesh = null;
         }
 
-        if (meshCombiner.GetComponentsInChildren<Transform>(true)
-            .Any(child => child != null && child != meshCombiner.transform && !child.gameObject.activeSelf))
+        int restoredGameObjects = 0;
+        foreach (GameObjectState state in snapshot.gameObjects)
         {
-            return true;
+            GameObject sourceGameObject = EditorUtility.InstanceIDToObject(state.instanceId) as GameObject;
+            if (sourceGameObject == null || sourceGameObject.activeSelf == state.activeSelf)
+            {
+                continue;
+            }
+
+            sourceGameObject.SetActive(state.activeSelf);
+            restoredGameObjects++;
         }
 
-        return meshCombiner.GetComponentsInChildren<MeshRenderer>(true)
-            .Any(renderer => renderer != null && renderer != destinationMeshRenderer && !renderer.enabled);
+        int restoredRenderers = 0;
+        foreach (RendererState state in snapshot.renderers)
+        {
+            MeshRenderer sourceRenderer = EditorUtility.InstanceIDToObject(state.instanceId) as MeshRenderer;
+            if (sourceRenderer == null || sourceRenderer.enabled == state.enabled)
+            {
+                continue;
+            }
+
+            sourceRenderer.enabled = state.enabled;
+            restoredRenderers++;
+        }
+
+        Debug.Log(
+            "Mesh Combiner: restored exact pre-combine source state for \"" + meshCombiner.name + "\". " +
+            "Restored " + restoredGameObjects + " GameObject active states and " + restoredRenderers + " MeshRenderer enabled states.",
+            meshCombiner);
+    }
+
+    private static string GetRestoreStateKey(MeshCombiner meshCombiner)
+    {
+        return RestoreStateKeyPrefix + meshCombiner.GetInstanceID();
+    }
+
+    private static void SaveRestoreSnapshot(MeshCombiner meshCombiner, RestoreSnapshot snapshot)
+    {
+        SessionState.SetString(GetRestoreStateKey(meshCombiner), JsonUtility.ToJson(snapshot));
+    }
+
+    private static bool HasRestoreSnapshot(MeshCombiner meshCombiner)
+    {
+        return !string.IsNullOrEmpty(SessionState.GetString(GetRestoreStateKey(meshCombiner), string.Empty));
+    }
+
+    private static bool TryGetRestoreSnapshot(MeshCombiner meshCombiner, out RestoreSnapshot snapshot)
+    {
+        string json = SessionState.GetString(GetRestoreStateKey(meshCombiner), string.Empty);
+        if (string.IsNullOrEmpty(json))
+        {
+            snapshot = null;
+            return false;
+        }
+
+        snapshot = JsonUtility.FromJson<RestoreSnapshot>(json);
+        return snapshot != null;
+    }
+
+    private static void ClearRestoreSnapshot(MeshCombiner meshCombiner)
+    {
+        SessionState.EraseString(GetRestoreStateKey(meshCombiner));
     }
 
     private static bool IsValidPath(string folderPath)
