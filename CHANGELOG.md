@@ -2,6 +2,19 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.0.2] - 2026-08-08
+
+### Fixed
+
+- **Restore / Undo Combine** now restores the exact pre-combine active/enabled state instead of enabling every inactive descendant and every disabled child MeshRenderer.
+- The Editor captures the state of child MeshFilter GameObjects and MeshRenderers before combine and keeps the restore snapshot in Unity `SessionState` for the current Editor session.
+- This prevents previously inactive helper/variant geometry from becoming active after Restore and then being accidentally included in the next combine pass.
+
+### Changed
+
+- Combine is disabled while an exact restore snapshot is pending, forcing a clean `Combine -> Restore -> Combine` comparison loop.
+- Existing combined meshes created before 2.0.2 show a warning because they do not have an exact restore snapshot.
+
 ## [2.0.1] - 2026-08-08
 
 ### Added
