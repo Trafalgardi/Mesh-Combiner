@@ -19,6 +19,7 @@ All notable changes to this fork are documented in this file.
 
 ### Validation context
 
+- Real-scene testing is currently on Unity 6.3 LTS `6000.3.6f1`.
 - The supplied `HF_ModularReference.fbx` contains authored `LightmapUV` data on all 14 mesh geometries, so importer-side **Generate Lightmap UVs** is not required for that asset.
 - The reference FBX showed that differently sized wall modules use very different authored UV2 area per square unit of geometry. For example, the 0.75 m and 3.0 m wall modules both occupy a large portion of 0..1 UV space even though the larger wall has several times more surface area. A single unweighted UV scale therefore cannot maintain constant texel density after combining.
 
