@@ -36,6 +36,8 @@ public class MeshCombinerEditor : Editor
     private SerializedProperty _createMultiMaterialMesh;
     private SerializedProperty _combineInactiveChildren;
     private SerializedProperty _meshFiltersToSkip;
+    private SerializedProperty _removeExactOpposingFaces;
+    private SerializedProperty _exactFacePositionTolerance;
     private SerializedProperty _deactivateCombinedChildren;
     private SerializedProperty _deactivateCombinedChildrenMeshRenderers;
     private SerializedProperty _updateOrCreateMeshCollider;
@@ -50,6 +52,8 @@ public class MeshCombinerEditor : Editor
         _createMultiMaterialMesh = serializedObject.FindProperty("createMultiMaterialMesh");
         _combineInactiveChildren = serializedObject.FindProperty("combineInactiveChildren");
         _meshFiltersToSkip = serializedObject.FindProperty("meshFiltersToSkip");
+        _removeExactOpposingFaces = serializedObject.FindProperty("removeExactOpposingFaces");
+        _exactFacePositionTolerance = serializedObject.FindProperty("exactFacePositionTolerance");
         _deactivateCombinedChildren = serializedObject.FindProperty("deactivateCombinedChildren");
         _deactivateCombinedChildrenMeshRenderers = serializedObject.FindProperty("deactivateCombinedChildrenMeshRenderers");
         _updateOrCreateMeshCollider = serializedObject.FindProperty("updateOrCreateMeshCollider");
@@ -86,6 +90,35 @@ public class MeshCombinerEditor : Editor
         EditorGUILayout.HelpBox(
             "Nested exact duplicates are filtered automatically: if a deeper child uses the same shared Mesh at the same world transform as an ancestor below this root, the deeper child is skipped. This is intended for generic helper/proxy copies and does not depend on object names.",
             MessageType.Info);
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Geometry Cleanup", EditorStyles.boldLabel);
+        EditorGUILayout.PropertyField(
+            _removeExactOpposingFaces,
+            new GUIContent(
+                "Remove Exact Opposing Faces",
+                "After combining, removes pairs of coincident triangles that use the same three positions but face in opposite directions. Useful for exact back-to-back internal faces between modular pieces."));
+
+        if (_removeExactOpposingFaces.boolValue)
+        {
+            EditorGUILayout.PropertyField(
+                _exactFacePositionTolerance,
+                new GUIContent(
+                    "Position Tolerance",
+                    "Destination-local position tolerance used when matching the three triangle vertices. Start small; 0.0001 means 0.1 mm when one Unity unit is one meter."));
+            if (_exactFacePositionTolerance.floatValue < 0.000001f)
+                _exactFacePositionTolerance.floatValue = 0.000001f;
+
+            EditorGUILayout.HelpBox(
+                "Opt-in cleanup: any exact coincident triangle pair with opposite winding can be removed, including intentionally double-sided geometry. It removes triangle indices only; the vertex buffer is not compacted, so normals/tangents/UVs and other vertex attributes are left untouched.",
+                MessageType.Warning);
+        }
+        else
+        {
+            EditorGUILayout.HelpBox(
+                "Exact opposing-face cleanup is disabled by default because intentionally double-sided geometry can also contain coincident opposite-wound triangles.",
+                MessageType.Info);
+        }
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
