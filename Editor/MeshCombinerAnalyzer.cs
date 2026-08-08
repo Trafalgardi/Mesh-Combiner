@@ -168,6 +168,9 @@ internal static class MeshCombinerAnalyzer
         HashSet<Material> uniqueMaterials = new HashSet<Material>();
         bool foundNullMaterial = false;
         bool foundNonTriangleTopology = false;
+        bool inspectSourceUv2 =
+            lightmapUvMode == LightmapUvMode.PreserveSourceUv2 ||
+            lightmapUvMode == LightmapUvMode.PreserveAndRepackSourceUv2;
         List<MeshFilter> missingUv2 = new List<MeshFilter>();
 
         foreach (MeshFilter meshFilter in candidates)
@@ -214,9 +217,12 @@ internal static class MeshCombinerAnalyzer
                 }
             }
 
-            Vector2[] uv2 = mesh.uv2;
-            if (uv2 == null || uv2.Length == 0 || uv2.Length != mesh.vertexCount)
-                missingUv2.Add(meshFilter);
+            if (inspectSourceUv2)
+            {
+                Vector2[] uv2 = mesh.uv2;
+                if (uv2 == null || uv2.Length == 0 || uv2.Length != mesh.vertexCount)
+                    missingUv2.Add(meshFilter);
+            }
         }
 
         report.UniqueMaterialCount = uniqueMaterials.Count + (foundNullMaterial ? 1 : 0);
