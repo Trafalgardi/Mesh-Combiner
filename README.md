@@ -53,6 +53,12 @@ For the current development branch:
 
 Git must be installed and available in `PATH` for Unity Package Manager Git dependencies.
 
+### Updating a Git branch installation
+
+Unity records the resolved Git commit in `Packages/packages-lock.json`. If the package was already installed from `#agent/unity6-modernization` before a new fix was pushed, use the Package Manager **Update** action when available, or remove the `com.trafalgardi.mesh-combiner` entry from `Packages/packages-lock.json` and let Unity resolve packages again.
+
+If Unity still shows stale package contents, remove the package and add the same Git URL again.
+
 ## Requirements
 
 - Unity 6.0 (`6000.0`) or newer.
