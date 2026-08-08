@@ -7,6 +7,7 @@ All notable changes to this fork are documented in this file.
 ### Added
 
 - Unity Package Manager support through a root `package.json`.
+- Unity `.meta` files for all package assets and folders so Git-installed immutable packages import correctly.
 - Runtime and Editor assembly definitions for package-based installation.
 - Optional Update/Create MeshCollider output.
 - Unity 6 lightmap UV2 generation validation.
@@ -23,6 +24,7 @@ All notable changes to this fork are documented in this file.
 
 ### Fixed
 
+- Fixed Git-UPM installation being ignored because package files had no committed `.meta` files.
 - Fixed the upstream missing MeshCollider case when collider output is enabled.
 - Fixed fragile transform handling during combine.
 - Fixed ignored secondary UV generation failures.
