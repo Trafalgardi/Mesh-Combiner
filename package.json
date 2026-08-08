@@ -1,8 +1,8 @@
 {
   "name": "com.trafalgardi.mesh-combiner",
-  "version": "2.6.0-dev.1",
+  "version": "2.6.0-dev.2",
   "displayName": "Mesh Combiner",
-  "description": "Unity 6 mesh combining utility with analyzer/preflight, multi-material support, crash-safe recovery, geometry cleanup, MeshCollider output, and seam-aware Coplanar Stitched UV2 for baked lighting.",
+  "description": "Unity 6 mesh combining utility with analyzer/preflight, workflow-aware Inspector, multi-material support, crash-safe recovery, geometry cleanup, MeshCollider output, and seam-aware Coplanar Stitched UV2 for baked lighting.",
   "unity": "6000.0",
   "documentationUrl": "https://github.com/Trafalgardi/Mesh-Combiner/tree/dev#readme",
   "changelogUrl": "https://github.com/Trafalgardi/Mesh-Combiner/blob/dev/CHANGELOG.md",
