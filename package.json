@@ -4,9 +4,9 @@
   "displayName": "Mesh Combiner",
   "description": "Mesh combining utility for Unity 6 with multi-material support, lightmap UV2 generation, GI setup, and optional MeshCollider output.",
   "unity": "6000.0",
-  "documentationUrl": "https://github.com/Trafalgardi/Mesh-Combiner/tree/agent/unity6-modernization#readme",
-  "changelogUrl": "https://github.com/Trafalgardi/Mesh-Combiner/blob/agent/unity6-modernization/CHANGELOG.md",
-  "licensesUrl": "https://github.com/Trafalgardi/Mesh-Combiner/blob/agent/unity6-modernization/LICENSE",
+  "documentationUrl": "https://github.com/Trafalgardi/Mesh-Combiner#readme",
+  "changelogUrl": "https://github.com/Trafalgardi/Mesh-Combiner/blob/master/CHANGELOG.md",
+  "licensesUrl": "https://github.com/Trafalgardi/Mesh-Combiner/blob/master/LICENSE",
   "keywords": [
     "mesh",
     "combiner",
