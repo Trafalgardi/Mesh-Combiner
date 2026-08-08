@@ -39,7 +39,8 @@ public class MeshCombinerEditor : Editor
     private SerializedProperty _updateOrCreateMeshCollider;
     private SerializedProperty _destroyCombinedChildren;
     private SerializedProperty _lightmapUvMode;
-    private SerializedProperty _repackUvPadding;
+    private SerializedProperty _repackPaddingTexels;
+    private SerializedProperty _repackPaddingReferenceResolution;
     private SerializedProperty _folderPath;
 
     private void OnEnable()
@@ -52,7 +53,8 @@ public class MeshCombinerEditor : Editor
         _updateOrCreateMeshCollider = serializedObject.FindProperty("updateOrCreateMeshCollider");
         _destroyCombinedChildren = serializedObject.FindProperty("destroyCombinedChildren");
         _lightmapUvMode = serializedObject.FindProperty("lightmapUvMode");
-        _repackUvPadding = serializedObject.FindProperty("repackUvPadding");
+        _repackPaddingTexels = serializedObject.FindProperty("repackPaddingTexels");
+        _repackPaddingReferenceResolution = serializedObject.FindProperty("repackPaddingReferenceResolution");
         _folderPath = serializedObject.FindProperty("folderPath");
     }
 
@@ -255,21 +257,39 @@ public class MeshCombinerEditor : Editor
                 break;
 
             case LightmapUvMode.PreserveAndRepackSourceUv2:
-                EditorGUILayout.PropertyField(
-                    _repackUvPadding,
+                EditorGUILayout.IntSlider(
+                    _repackPaddingTexels,
+                    1,
+                    16,
                     new GUIContent(
-                        "Repack Padding",
-                        "Normalized padding around each source UV2 rectangle in the final 0..1 atlas. 0.002 is about one pixel at 512px."));
+                        "Chart Padding (texels)",
+                        "Padding reserved around every existing UV2 chart before packing. Increase this if UV Overlap still shows red chart neighborhoods."));
+
+                int[] resolutions = { 256, 512, 1024, 2048, 4096 };
+                string[] resolutionNames = { "256", "512", "1024", "2048", "4096" };
+                int currentResolution = _repackPaddingReferenceResolution.intValue;
+                if (!resolutions.Contains(currentResolution))
+                {
+                    currentResolution = 512;
+                }
+                _repackPaddingReferenceResolution.intValue = EditorGUILayout.IntPopup(
+                    new GUIContent(
+                        "Padding Reference Size",
+                        "Chart Padding is converted to normalized UV space using this resolution. 512 is a conservative default for a 1024 lightmap because the padding remains several pixels after scene-atlas scaling."),
+                    currentResolution,
+                    resolutionNames,
+                    resolutions);
+
                 EditorGUILayout.HelpBox(
-                    "Recommended for modular static geometry that already has good UV2. Existing charts are preserved; each source mesh is " +
-                    "scaled/offset into a non-overlapping atlas cell instead of re-unwrapping the whole combined mesh.",
+                    "Recommended for modular static geometry with valid source UV2. Version 2.1.1 packs individual UV charts, not whole source meshes: " +
+                    "all charts use one global scale, so adjacent modules keep consistent texel density. Existing chart topology is preserved and no new vertices are created.",
                     MessageType.Info);
                 break;
 
             case LightmapUvMode.RegenerateUv2:
                 EditorGUILayout.HelpBox(
                     "Rebuilds UV2 for the entire combined mesh with Unity's secondary UV unwrapper. This can split vertices and change baked seams. " +
-                    "UInt16 is kept when the total index count proves the regenerated mesh cannot exceed 65,535 vertices; UInt32 is used only when required.",
+                    "UInt16 is kept when the index-count upper bound proves the result cannot exceed 65,535 vertices.",
                     MessageType.Warning);
                 break;
         }
@@ -344,6 +364,7 @@ public class MeshCombinerEditor : Editor
             {
                 continue;
             }
+
             sourceGameObject.SetActive(state.activeSelf);
             restoredGameObjects++;
         }
@@ -356,6 +377,7 @@ public class MeshCombinerEditor : Editor
             {
                 continue;
             }
+
             sourceRenderer.enabled = state.enabled;
             restoredRenderers++;
         }
@@ -389,6 +411,7 @@ public class MeshCombinerEditor : Editor
             snapshot = null;
             return false;
         }
+
         snapshot = JsonUtility.FromJson<RestoreSnapshot>(json);
         return snapshot != null;
     }
