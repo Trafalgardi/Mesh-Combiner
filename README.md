@@ -199,6 +199,12 @@ The result log reports separately:
 
 This feature is currently experimental and remains separate from the normal `Lightmap UV Mode` enum until it is validated across more production scenes.
 
+### Debug-view note for stitched disconnected geometry
+
+The stitcher deliberately does **not** weld render vertices. Two modules can therefore remain topologically disconnected while receiving identical UV2 coordinates along the shared geometric boundary.
+
+Unity's **UV Overlap** or **Texel Validity** debug views can flag some of those stitched boundary texels, especially around complex cutouts/jambs, even when the actual baked surface is improved. Treat those debug modes as diagnostics, not the sole pass/fail criterion for this experimental mode. Always compare the final baked result and verify that no real chart area is double-covered away from the stitched boundary.
+
 ## Unity lightmap diagnostics
 
 Useful Scene View debug modes:
