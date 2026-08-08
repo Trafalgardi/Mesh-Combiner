@@ -183,7 +183,7 @@ internal static class MeshExactFaceCleanup
                 filteredIndices.Add(sourceIndices[triangleStart + 2]);
             }
 
-            mesh.SetIndices(filteredIndices, MeshTopology.Triangles, subMeshIndex, false, 0);
+            mesh.SetIndices(filteredIndices, MeshTopology.Triangles, subMeshIndex, true, 0);
         }
 
         mesh.RecalculateBounds();
