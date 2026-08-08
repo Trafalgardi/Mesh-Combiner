@@ -44,6 +44,7 @@ Unity pins the resolved Git commit in `Packages/packages-lock.json`. If Package 
 ## Requirements
 
 - Unity 6.0 (`6000.0`) or newer.
+- Real-scene validation is being performed on Unity **6.3 LTS / 6000.3.6f1**.
 - Git in `PATH` for UPM Git installation.
 - Runtime combining requires source meshes with `Read/Write Enabled`.
 
