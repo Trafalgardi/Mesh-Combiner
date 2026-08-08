@@ -2,6 +2,26 @@
 
 All notable changes to this fork are documented in this file.
 
+## [2.2.0] - 2026-08-08
+
+### Fixed
+
+- **Preserve And Repack Source UV2** now sizes UV charts from their world-space surface area instead of trusting the normalized size of each source asset's authored UV2 layout.
+- This fixes inconsistent lightmap texel density between differently sized modular pieces whose authored lightmap UVs each independently fill most of the 0..1 range.
+- UV chart connectivity is now detected through shared UV edges, so hard-normal vertex splits do not unnecessarily turn one authored UV island into several packing charts.
+- Child MeshFilters whose `MeshRenderer.enabled` is false are skipped automatically. This prevents disabled bake proxies/helper renderers from being duplicated into the combined geometry.
+
+### Changed
+
+- Chart packing still preserves authored UV2 topology, but applies a per-chart density correction based on `sqrt(world surface area / source UV area)` before the final global atlas packing scale.
+- Source `Scale In Lightmap` is included in the relative chart scale in Edit Mode.
+- Combine logs now report skipped disabled renderers and the normalized chart-density range in addition to chart count/global packing scale.
+
+### Validation context
+
+- The supplied `HF_ModularReference.fbx` contains authored `LightmapUV` data on all 14 mesh geometries, so importer-side **Generate Lightmap UVs** is not required for that asset.
+- The reference FBX showed that differently sized wall modules use very different authored UV2 area per square unit of geometry. For example, the 0.75 m and 3.0 m wall modules both occupy a large portion of 0..1 UV space even though the larger wall has several times more surface area. A single unweighted UV scale therefore cannot maintain constant texel density after combining.
+
 ## [2.1.2] - 2026-08-08
 
 ### Fixed
