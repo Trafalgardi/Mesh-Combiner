@@ -278,7 +278,6 @@ public static class MeshCoplanarLightmapUv
                 triangleIndex,
                 triangle.normal,
                 inverseTolerance,
-                triangles,
                 minimumNormalDot,
                 sets,
                 edgeOwners,
@@ -289,7 +288,6 @@ public static class MeshCoplanarLightmapUv
                 triangleIndex,
                 triangle.normal,
                 inverseTolerance,
-                triangles,
                 minimumNormalDot,
                 sets,
                 edgeOwners,
@@ -300,7 +298,6 @@ public static class MeshCoplanarLightmapUv
                 triangleIndex,
                 triangle.normal,
                 inverseTolerance,
-                triangles,
                 minimumNormalDot,
                 sets,
                 edgeOwners,
@@ -456,7 +453,6 @@ public static class MeshCoplanarLightmapUv
         int triangleIndex,
         Vector3 normal,
         double inverseTolerance,
-        List<Triangle> triangles,
         float minimumNormalDot,
         DisjointSet sets,
         Dictionary<EdgeKey, List<EdgeRecord>> edgeOwners,
@@ -472,7 +468,7 @@ public static class MeshCoplanarLightmapUv
         for (int ownerIndex = 0; ownerIndex < owners.Count; ownerIndex++)
         {
             EdgeRecord other = owners[ownerIndex];
-            if (Vector3.Dot(normal, triangles[other.triangleIndex].normal) < minimumNormalDot) continue;
+            if (Vector3.Dot(normal, other.normal) < minimumNormalDot) continue;
             if (sets.Union(triangleIndex, other.triangleIndex)) exactEdgeConnections++;
         }
 
@@ -513,10 +509,11 @@ public static class MeshCoplanarLightmapUv
 
     private static bool ExpandedBoundsOverlap(EdgeRecord a, EdgeRecord b, float tolerance)
     {
-        Vector3 minA = Vector3.Min(a.a, a.b) - Vector3.one * tolerance;
-        Vector3 maxA = Vector3.Max(a.a, a.b) + Vector3.one * tolerance;
-        Vector3 minB = Vector3.Min(b.a, b.b) - Vector3.one * tolerance;
-        Vector3 maxB = Vector3.Max(b.a, b.b) + Vector3.one * tolerance;
+        Vector3 expansion = Vector3.one * tolerance;
+        Vector3 minA = Vector3.Min(a.a, a.b) - expansion;
+        Vector3 maxA = Vector3.Max(a.a, a.b) + expansion;
+        Vector3 minB = Vector3.Min(b.a, b.b) - expansion;
+        Vector3 maxB = Vector3.Max(b.a, b.b) + expansion;
 
         return minA.x <= maxB.x && maxA.x >= minB.x &&
                minA.y <= maxB.y && maxA.y >= minB.y &&
