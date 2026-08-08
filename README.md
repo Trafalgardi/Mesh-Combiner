@@ -4,9 +4,68 @@ A small Unity editor/runtime utility for combining child `MeshFilter` meshes int
 
 This fork modernizes the original project for **Unity 6** workflows, with special attention to static geometry and baked lighting.
 
+## Install via Unity Package Manager
+
+### Package Manager window
+
+1. Open **Window -> Package Management -> Package Manager**.
+2. Click the **+** button.
+3. Choose **Install package from git URL...**.
+4. Paste:
+
+```text
+https://github.com/Trafalgardi/Mesh-Combiner.git
+```
+
+5. Click **Install**.
+
+The repository contains `package.json` at its root, so no `?path=` suffix is required.
+
+### Install the current Unity 6 development branch
+
+Until the Unity 6 modernization PR is merged into `master`, install this branch directly:
+
+```text
+https://github.com/Trafalgardi/Mesh-Combiner.git#agent/unity6-modernization
+```
+
+### Add manually to Packages/manifest.json
+
+You can also add the package directly to your Unity project's `Packages/manifest.json`:
+
+```json
+{
+  "dependencies": {
+    "com.trafalgardi.mesh-combiner": "https://github.com/Trafalgardi/Mesh-Combiner.git"
+  }
+}
+```
+
+For the current development branch:
+
+```json
+{
+  "dependencies": {
+    "com.trafalgardi.mesh-combiner": "https://github.com/Trafalgardi/Mesh-Combiner.git#agent/unity6-modernization"
+  }
+}
+```
+
+Git must be installed and available in `PATH` for Unity Package Manager Git dependencies.
+
+## Requirements
+
+- Unity 6.0 (`6000.0`) or newer.
+- Git available in `PATH` when installing from a Git URL.
+- Runtime combining requires source meshes with `Read/Write Enabled`.
+
+Package name: `com.trafalgardi.mesh-combiner`
+
+Current package version: `2.0.0`
+
 ## Unity 6 modernization
 
-The `agent/unity6-modernization` branch adds:
+The Unity 6 version adds:
 
 - transform-safe combining without temporarily unparenting/resetting the destination object;
 - validation for missing meshes/renderers and runtime `Read/Write` requirements;
@@ -63,10 +122,6 @@ This version currently does **not**:
 - simplify mesh topology.
 
 If two cubes touch face-to-face, the two internal faces still exist after combine. A dedicated static-geometry cleanup pass should be implemented and tested separately because blindly welding vertices or deleting coplanar faces can break hard normals, UV seams, intentional interior surfaces, and modular geometry.
-
-## Installation
-
-Copy the repository folders into your Unity project's `Assets` folder, preserving the `Editor` folder name.
 
 ## Basic code use
 
