@@ -14,6 +14,7 @@ internal enum MeshCombinerWorkflowState
 internal static class MeshCombinerEditorState
 {
     private const string RestoreStateKeyPrefix = "Trafalgardi.MeshCombiner.RestoreState.";
+    private const string CombinedStateKeyPrefix = "Trafalgardi.MeshCombiner.CombinedState.";
 
     [Serializable]
     private sealed class RestoreSnapshot
@@ -42,10 +43,14 @@ internal static class MeshCombinerEditorState
     {
         bool hasOutput = destinationMeshFilter != null && destinationMeshFilter.sharedMesh != null;
         bool hasSnapshot = HasRestoreSnapshot(combiner);
+        bool markedCombined = IsMarkedCombined(combiner);
 
-        if (hasOutput && hasSnapshot) return MeshCombinerWorkflowState.Combined;
-        if (hasOutput) return MeshCombinerWorkflowState.OutputWithoutSnapshot;
-        if (hasSnapshot) return MeshCombinerWorkflowState.InterruptedRecoverable;
+        // Backward-compatible: a snapshot plus output is sufficient evidence that this tool produced the output.
+        if (hasOutput && (markedCombined || hasSnapshot)) return MeshCombinerWorkflowState.Combined;
+        if (markedCombined && hasOutput) return MeshCombinerWorkflowState.OutputWithoutSnapshot;
+        if (hasSnapshot && !hasOutput) return MeshCombinerWorkflowState.InterruptedRecoverable;
+
+        // A pre-existing Mesh on the root is not automatically considered combined output.
         return MeshCombinerWorkflowState.Ready;
     }
 
@@ -64,6 +69,17 @@ internal static class MeshCombinerEditorState
         EditorPrefs.SetString(GetRestoreStateKey(combiner), JsonUtility.ToJson(snapshot));
     }
 
+    public static void MarkCombined(MeshCombiner combiner)
+    {
+        if (combiner == null) return;
+        EditorPrefs.SetBool(GetCombinedStateKey(combiner), true);
+    }
+
+    public static bool IsMarkedCombined(MeshCombiner combiner)
+    {
+        return combiner != null && EditorPrefs.GetBool(GetCombinedStateKey(combiner), false);
+    }
+
     public static bool HasRestoreSnapshot(MeshCombiner combiner)
     {
         if (combiner == null) return false;
@@ -76,15 +92,10 @@ internal static class MeshCombinerEditorState
         EditorPrefs.DeleteKey(GetRestoreStateKey(combiner));
     }
 
-    public static bool TryGetSnapshotCounts(MeshCombiner combiner, out int gameObjectCount, out int rendererCount)
+    public static void ClearWorkflowMarkers(MeshCombiner combiner)
     {
-        gameObjectCount = 0;
-        rendererCount = 0;
-        if (!TryGetSnapshot(combiner, out RestoreSnapshot snapshot)) return false;
-
-        gameObjectCount = snapshot.gameObjects != null ? snapshot.gameObjects.Count : 0;
-        rendererCount = snapshot.renderers != null ? snapshot.renderers.Count : 0;
-        return true;
+        if (combiner == null) return;
+        EditorPrefs.DeleteKey(GetCombinedStateKey(combiner));
     }
 
     public static bool RestoreExactState(
@@ -135,6 +146,7 @@ internal static class MeshCombinerEditorState
         }
 
         ClearRestoreSnapshot(combiner);
+        ClearWorkflowMarkers(combiner);
         DestroyTransientCombinedMesh(generatedMesh);
 
         EditorUtility.SetDirty(combiner);
@@ -182,6 +194,7 @@ internal static class MeshCombinerEditorState
         }
 
         ClearRestoreSnapshot(combiner);
+        ClearWorkflowMarkers(combiner);
         DestroyTransientCombinedMesh(generatedMesh);
 
         EditorUtility.SetDirty(combiner);
@@ -271,10 +284,20 @@ internal static class MeshCombinerEditorState
 
     private static string GetRestoreStateKey(MeshCombiner combiner)
     {
+        return RestoreStateKeyPrefix + GetObjectScopedKey(combiner);
+    }
+
+    private static string GetCombinedStateKey(MeshCombiner combiner)
+    {
+        return CombinedStateKeyPrefix + GetObjectScopedKey(combiner);
+    }
+
+    private static string GetObjectScopedKey(MeshCombiner combiner)
+    {
         string projectKey = Hash128.Compute(Application.dataPath).ToString();
         string objectKey = GetStableObjectId(combiner);
         if (string.IsNullOrEmpty(objectKey)) objectKey = "instance-" + combiner.GetInstanceID();
-        return RestoreStateKeyPrefix + projectKey + "." + objectKey;
+        return projectKey + "." + objectKey;
     }
 
     private static string GetStableObjectId(UnityEngine.Object target)
