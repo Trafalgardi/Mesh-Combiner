@@ -266,22 +266,30 @@ public class MeshCombinerEditor : Editor
                         "Padding reserved around every existing UV2 chart before packing. Increase this if UV Overlap still shows red chart neighborhoods."));
 
                 int[] resolutions = { 256, 512, 1024, 2048, 4096 };
-                string[] resolutionNames = { "256", "512", "1024", "2048", "4096" };
+                GUIContent[] resolutionOptions =
+                {
+                    new GUIContent("256"),
+                    new GUIContent("512"),
+                    new GUIContent("1024"),
+                    new GUIContent("2048"),
+                    new GUIContent("4096")
+                };
                 int currentResolution = _repackPaddingReferenceResolution.intValue;
                 if (!resolutions.Contains(currentResolution))
                 {
                     currentResolution = 512;
                 }
+
                 _repackPaddingReferenceResolution.intValue = EditorGUILayout.IntPopup(
                     new GUIContent(
                         "Padding Reference Size",
                         "Chart Padding is converted to normalized UV space using this resolution. 512 is a conservative default for a 1024 lightmap because the padding remains several pixels after scene-atlas scaling."),
                     currentResolution,
-                    resolutionNames,
+                    resolutionOptions,
                     resolutions);
 
                 EditorGUILayout.HelpBox(
-                    "Recommended for modular static geometry with valid source UV2. Version 2.1.1 packs individual UV charts, not whole source meshes: " +
+                    "Recommended for modular static geometry with valid source UV2. Version 2.1.2 packs individual UV charts, not whole source meshes: " +
                     "all charts use one global scale, so adjacent modules keep consistent texel density. Existing chart topology is preserved and no new vertices are created.",
                     MessageType.Info);
                 break;
